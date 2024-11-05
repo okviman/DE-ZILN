@@ -76,9 +76,9 @@ def visualize_lfc_normality():
 
 
 def lfc_coverage():
-    r_treatment = 1
-    r_ctrl = 1
-    p = 0.1
+    r_treatment = 10
+    r_ctrl = 15
+    p = 0.9
     x_treatment, a_treatment, b_treatment = generate_count_data(r_treatment, p, 1000)
     x_ctrl, a_ctrl, b_ctrl = generate_count_data(r_ctrl, p, 1000)
     f, ax = plt.subplots(3, 1)
@@ -91,35 +91,48 @@ def lfc_coverage():
 
     coverage_ziln = []
     coverage_normal = []
-    n_list = [10, 50, 100, 200, 500, 1000, 2000, 6000, 8000, 10000]
+    coverage_log1p = []
+    n_list = [10, 20, 30, 50, 100, 1000]
     for n in n_list:
         experiments = 2000
         lfc_ziln_intervals = np.zeros((2, experiments))
         lfc_normal_intervals = np.zeros((2, experiments))
+        lfc_log1p_intervals = np.zeros((2, experiments))
         for i in range(experiments):
             x_treatment, a_treatment, b_treatment = generate_count_data(r_treatment, p, n)
             x_ctrl, a_ctrl, b_ctrl = generate_count_data(r_ctrl, p, n)
 
-            for model in ['lognormal', 'naive']:
+            for model in ['lognormal', 'naive', "log1p"]:
 
-                _, lt, se_t = get_intervals(np.log(x_treatment[x_treatment > 0]), a_treatment, b_treatment, model=model)
-                _, lc, se_c = get_intervals(np.log(x_ctrl[x_ctrl > 0]), a_ctrl, b_ctrl, model=model)
+                if model == 'log1p':
+                    log_x_t, log_x_c = np.log(1 + x_treatment), np.log(1 + x_ctrl)
+                    lt, lc = np.mean(log_x_t), np.mean(log_x_c)
+                    se_t, se_c = np.sqrt(np.var(log_x_t) / n), np.sqrt(np.var(log_x_c) / n)
+                else:
+                    _, lt, se_t = get_intervals(np.log(x_treatment[x_treatment > 0]), a_treatment + 1, b_treatment + 1, model=model)
+                    _, lc, se_c = get_intervals(np.log(x_ctrl[x_ctrl > 0]), a_ctrl + 1, b_ctrl + 1, model=model)
 
                 estimated_lfc = lt - lc
                 se_lfc = np.sqrt(se_t ** 2 + se_c ** 2)
                 if model == 'lognormal':
                     lfc_ziln_intervals[:, i] = estimated_lfc + 1.96 * np.array([-se_lfc, se_lfc])
+                elif model == 'log1p':
+                    lfc_log1p_intervals[:, i] = estimated_lfc + 1.96 * np.array([-se_lfc, se_lfc])
                 else:
                     lfc_normal_intervals[:, i] = np.exp(estimated_lfc) + 1.96 * np.array([-se_lfc, se_lfc])
 
         lfc = np.log(r_treatment * (1 - p) / p) - np.log(r_ctrl * (1 - p) / p)
 
         print("n:", n)
-        for model in ['lognormal', 'naive']:
+        for model in ['lognormal', 'naive', 'log1p']:
             if model == 'lognormal':
                 coverage_percentage = (np.sum(
                     (lfc > lfc_ziln_intervals[0, :]) * (lfc < lfc_ziln_intervals[1, :]))) / experiments
                 coverage_ziln.append(coverage_percentage)
+            elif model == 'log1p':
+                coverage_percentage = (np.sum(
+                    (lfc > lfc_log1p_intervals[0, :]) * (lfc < lfc_log1p_intervals[1, :]))) / experiments
+                coverage_log1p.append(coverage_percentage)
             else:
                 coverage_percentage = (np.sum(
                     (np.exp(lfc) > lfc_normal_intervals[0, :]) * (np.exp(lfc) < lfc_normal_intervals[1, :]))) / experiments
@@ -127,11 +140,13 @@ def lfc_coverage():
             print(model + ":", coverage_percentage)
     ax[2].plot(n_list, coverage_ziln, color='b', label='ZILN')
     ax[2].plot(n_list, coverage_normal, color='r', label='normal')
+    ax[2].plot(n_list, coverage_log1p, color='magenta', label='log1p')
     ax[2].hlines(0.95, n_list[0], n_list[-1], color='black', linestyle='--', label='95% coverage')
     ax[2].legend(loc='best')
     ax[2].set_xlabel('$n$')
     plt.tight_layout()
     plt.show()
+
 
 if __name__ == '__main__':
     # visualize_lfc_normality()
