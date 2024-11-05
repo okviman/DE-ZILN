@@ -76,9 +76,9 @@ def visualize_lfc_normality():
 
 
 def lfc_coverage():
-    r_treatment = 10
-    r_ctrl = 15
-    p = 0.9
+    r_treatment = 0.5
+    r_ctrl = 1
+    p = 0.8
     x_treatment, a_treatment, b_treatment = generate_count_data(r_treatment, p, 1000)
     x_ctrl, a_ctrl, b_ctrl = generate_count_data(r_ctrl, p, 1000)
     f, ax = plt.subplots(3, 1)
@@ -109,8 +109,8 @@ def lfc_coverage():
                     lt, lc = np.mean(log_x_t), np.mean(log_x_c)
                     se_t, se_c = np.sqrt(np.var(log_x_t) / n), np.sqrt(np.var(log_x_c) / n)
                 else:
-                    _, lt, se_t = get_intervals(np.log(x_treatment[x_treatment > 0]), a_treatment + 1, b_treatment + 1, model=model)
-                    _, lc, se_c = get_intervals(np.log(x_ctrl[x_ctrl > 0]), a_ctrl + 1, b_ctrl + 1, model=model)
+                    _, lt, se_t = get_intervals(np.log(x_treatment[x_treatment > 0]), a_treatment, b_treatment, model=model)
+                    _, lc, se_c = get_intervals(np.log(x_ctrl[x_ctrl > 0]), a_ctrl, b_ctrl, model=model)
 
                 estimated_lfc = lt - lc
                 se_lfc = np.sqrt(se_t ** 2 + se_c ** 2)
