@@ -45,7 +45,7 @@ def get_intervals(log_x, a, b, z=1.96, model='lognormal'):
     se = np.sqrt(squared_standard_error_ln + squared_standard_error_log_beta)
 
     # estimate of the log of the mean of the ZILN
-    log_mean_estimate = mu_bar + sigma_bar / 2 + mu_log_beta + var_log_beta / 2
+    log_mean_estimate = mu_bar + sigma_bar / 2 + mu_log_beta  # this term was incorrectly found here + var_log_beta / 2
 
     log_intervals = log_mean_estimate + z * np.array([-se, se])
     antilog_interval = np.exp(log_intervals)
