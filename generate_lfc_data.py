@@ -54,10 +54,12 @@ def get_random_lfc_data(path_to_save_datasets):
     for n_samples in n_list:
         counts_1 = np.zeros((n_samples, n_genes))
         counts_2 = np.zeros_like(counts_1)
+        lfcs = np.zeros(n_genes)
         for g in range(n_genes):
             if g % 10 == 0:
                 # differentiated gene
                 lfc = np.random.uniform(-4, 4)
+                lfcs[g] = lfc
                 # lfc = log(r1 * (1 - p) / p) - log(r2 * (1 - p) / p) = log(r1 / r2) --> r1 = exp(lfc + log(r2))
                 r_variable = np.exp(lfc + np.log(r2))
             else:
@@ -70,8 +72,11 @@ def get_random_lfc_data(path_to_save_datasets):
 
         df1 = pd.DataFrame(counts_1)
         df2 = pd.DataFrame(counts_2)
+        df3 = pd.DataFrame(lfcs)
         df1.to_csv(n_samples_ds_dir + "/" + "treatment_counts.csv")
         df2.to_csv(n_samples_ds_dir + "/" + "control_counts.csv")
+        df3.to_csv(n_samples_ds_dir + "/" + "lfcs.csv")
+
 
 
 if __name__ == '__main__':
