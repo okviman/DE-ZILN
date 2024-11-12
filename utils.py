@@ -33,14 +33,19 @@ def intervals_beta(a, b, z=1.96):
     return antilog_interval, mu_log_beta, var_log_beta
 
 
-def get_intervals(log_x, a, b, z=1.96, model='lognormal'):
+def get_intervals(log_x, a, b, z=1.96, model='lognormal', eps=0):
     if model == 'naive':
         return interval_naive(log_x, b, z)
     n = log_x.size
-    _, mu_bar, sigma_bar = intervals_ln(log_x, n, z)
-    _, mu_log_beta, var_log_beta = intervals_beta(a, b, z)
+    if n > 0:
+        _, mu_bar, sigma_bar = intervals_ln(log_x, n, z)
+        squared_standard_error_ln = np.var(log_x) / n + np.var(log_x) ** 2 / (2 * (n + 1))
+    else:
+        # if there are no non-negative values, the LN is a point mass in 0 (exp(-inf) = 0)
+        mu_bar, sigma_bar = -np.inf, 0
+        squared_standard_error_ln = 0
+    _, mu_log_beta, var_log_beta = intervals_beta(a + eps, b + eps, z)
 
-    squared_standard_error_ln = np.var(log_x) / n + np.var(log_x) ** 2 / (2 * (n + 1))
     squared_standard_error_log_beta = var_log_beta
     se = np.sqrt(squared_standard_error_ln + squared_standard_error_log_beta)
 
