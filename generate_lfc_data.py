@@ -48,7 +48,7 @@ def get_random_lfc_data(path_to_save_datasets):
     r2 = 5
     p = 0.6
 
-    ds_path = path_to_save_datasets + f"data_from_NB_parameters_r2_{r2}_p_0{int(10 * p)}"
+    ds_path = path_to_save_datasets + f"data_from_NB_parameters_r2_{r2}_p_0{int(10 * p)}".replace('.', '')
     os.mkdir(ds_path)
 
     for n_samples in n_list:
@@ -61,7 +61,7 @@ def get_random_lfc_data(path_to_save_datasets):
                 lfc = np.random.uniform(-4, 4)
                 lfcs[g] = lfc
                 # lfc = log(r1 * (1 - p) / p) - log(r2 * (1 - p) / p) = log(r1 / r2) --> r1 = exp(lfc + log(r2))
-                r_variable = np.exp(lfc + np.log(r2))
+                r_variable = 2 ** (lfc + np.log2(r2))
             else:
                 # non-differentiated gene
                 r_variable = r2
