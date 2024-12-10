@@ -57,32 +57,6 @@ def get_intervals(log_x, a, b, z=1.96, model='lognormal', eps=0.):
     return antilog_interval, log_mean_estimate, se
 
 
-def get_lfcs(X, Y):
-    # Assuming X and Y are numpy arrays of raw counts
-    # X: ctrl group (n_cells_x x n_genes)
-    # Y: treatment group (n_cells_y x n_genes)
-    n_genes = X.shape[-1]
-
-    estimated_lfcs = np.zeros(n_genes)
-    for g in range(n_genes):
-        x = X[:, g]
-        x_N_plus = np.sum(x > 0, axis=0)
-        x_N_0 = np.sum(x == 0, axis=0)
-        log_x = np.log(x[x > 0])
-        _, log_mu_x, _ = get_intervals(log_x, x_N_plus, x_N_0, eps=1e-3)
-
-        y = Y[:, g]
-        y_N_plus = np.sum(y > 0, axis=0)
-        y_N_0 = np.sum(y == 0, axis=0)
-        log_y = np.log(y[y > 0])
-        _, log_mu_y, _ = get_intervals(log_y, y_N_plus, y_N_0, eps=1e-3)
-
-        estimated_lfc = (log_mu_y - log_mu_x) / np.log(2)
-        estimated_lfcs[g] = estimated_lfc
-
-    return estimated_lfcs
-
-
 
 def interval_naive(log_x, N_0, z=1.96):
     zeros = np.zeros(N_0)
@@ -114,3 +88,62 @@ def get_intervals_synthetic_data(true_mu, true_sigma_2, true_theta, experiments=
         intervals[:, i] = antilog_interval
         estimated_means[i] = np.exp(log_mean_estimate)
     return intervals, estimated_means
+
+
+def get_ZILN_lfcs(X, Y, eps=0.):
+    # Assuming X and Y are numpy arrays of raw counts
+    # X: ctrl group (n_cells_x x n_genes)
+    # Y: treatment group (n_cells_y x n_genes)
+
+    n_genes = X.shape[-1]
+    estimated_lfcs = np.zeros(n_genes)
+    for g in range(n_genes):
+        x = X[:, g]
+        x_N_plus = np.sum(x > 0, axis=0)
+        x_N_0 = np.sum(x == 0, axis=0)
+        log_x = np.log(x[x > 0])
+        _, log_mu_x, _ = get_intervals(log_x, x_N_plus, x_N_0, eps=eps)
+
+        y = Y[:, g]
+        y_N_plus = np.sum(y > 0, axis=0)
+        y_N_0 = np.sum(y == 0, axis=0)
+        log_y = np.log(y[y > 0])
+        _, log_mu_y, _ = get_intervals(log_y, y_N_plus, y_N_0, eps=eps)
+
+        estimated_lfc = (log_mu_y - log_mu_x) / np.log(2)
+
+        estimated_lfcs[g] = estimated_lfc
+    return estimated_lfcs
+
+
+def get_seurat_lfcs(X, Y, normalize=True):
+    # Manual calculation of the LFC based on how seurat implements it.
+    # See Log fold-change calculation methods in https://www.biorxiv.org/content/10.1101/2022.05.09.490241v2.full.pdf
+    if normalize:
+        log_X = transform(X)
+    else:
+        log_X = np.log(X + 1)
+    if normalize:
+        log_Y = transform(Y)
+    else:
+        log_Y = np.log(Y + 1)
+
+    return np.log2(np.mean(np.exp(log_Y) - 1, 0) + 1) - np.log2(np.mean(np.exp(log_X) - 1, 0) + 1)
+
+
+def get_scanpy_lfcs(X, Y, normalize=True):
+    if normalize:
+        log_X = transform(X)
+    else:
+        log_X = np.log(X + 1)
+    if normalize:
+        log_Y = transform(Y)
+    else:
+        log_Y = np.log(Y + 1)
+
+    return np.log2(np.exp(np.mean(log_Y, 0)) - 1 + 1e-9) - np.log2(np.exp(np.mean(log_X, 0)) - 1 + 1e-9)
+
+
+def transform(z):
+    # log(10000 * z / z.sum(over genes for each cell) + 1)
+    return np.log((z * 1e4 / z.sum(1, keepdims=True)) + 1)
