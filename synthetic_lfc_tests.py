@@ -76,9 +76,9 @@ def visualize_lfc_normality():
 
 
 def lfc_coverage():
-    r_treatment = 0.5
-    r_ctrl = 1
-    p = 0.8
+    r_treatment = 2
+    r_ctrl = 5
+    p = 0.6
     x_treatment, a_treatment, b_treatment = generate_count_data(r_treatment, p, 1000)
     x_ctrl, a_ctrl, b_ctrl = generate_count_data(r_ctrl, p, 1000)
     f, ax = plt.subplots(3, 1)

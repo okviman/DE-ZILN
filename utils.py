@@ -33,7 +33,7 @@ def intervals_beta(a, b, z=1.96):
     return antilog_interval, mu_log_beta, var_log_beta
 
 
-def get_intervals(log_x, a, b, z=1.96, model='lognormal', eps=0):
+def get_intervals(log_x, a, b, z=1.96, model='lognormal', eps=0.):
     if model == 'naive':
         return interval_naive(log_x, b, z)
     n = log_x.size
@@ -55,6 +55,33 @@ def get_intervals(log_x, a, b, z=1.96, model='lognormal', eps=0):
     log_intervals = log_mean_estimate + z * np.array([-se, se])
     antilog_interval = np.exp(log_intervals)
     return antilog_interval, log_mean_estimate, se
+
+
+def get_lfcs(X, Y):
+    # Assuming X and Y are numpy arrays of raw counts
+    # X: ctrl group (n_cells_x x n_genes)
+    # Y: treatment group (n_cells_y x n_genes)
+    n_genes = X.shape[-1]
+
+    estimated_lfcs = np.zeros(n_genes)
+    for g in range(n_genes):
+        x = X[:, g]
+        x_N_plus = np.sum(x > 0, axis=0)
+        x_N_0 = np.sum(x == 0, axis=0)
+        log_x = np.log(x[x > 0])
+        _, log_mu_x, _ = get_intervals(log_x, x_N_plus, x_N_0, eps=1e-3)
+
+        y = Y[:, g]
+        y_N_plus = np.sum(y > 0, axis=0)
+        y_N_0 = np.sum(y == 0, axis=0)
+        log_y = np.log(y[y > 0])
+        _, log_mu_y, _ = get_intervals(log_y, y_N_plus, y_N_0, eps=1e-3)
+
+        estimated_lfc = (log_mu_y - log_mu_x) / np.log(2)
+        estimated_lfcs[g] = estimated_lfc
+
+    return estimated_lfcs
+
 
 
 def interval_naive(log_x, N_0, z=1.96):
