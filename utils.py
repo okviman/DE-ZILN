@@ -41,7 +41,7 @@ def get_intervals(log_x, a, b, z=1.96, model='lognormal', eps=0.):
         _, mu_bar, sigma_bar = intervals_ln(log_x, n, z)
         squared_standard_error_ln = np.var(log_x) / n + np.var(log_x) ** 2 / (2 * (n + 1))
     else:
-        # if there are no non-negative values, the LN is a point mass in 0 (exp(-inf) = 0)
+        # if there are no positive values, the LN is a point mass in 0 (exp(-inf) = 0)
         mu_bar, sigma_bar = -np.inf, 0
         squared_standard_error_ln = 0
     _, mu_log_beta, var_log_beta = intervals_beta(a + eps, b + eps, z)
@@ -110,7 +110,11 @@ def get_ZILN_lfcs(X, Y, eps=0.):
         log_y = np.log(y[y > 0])
         _, log_mu_y, _ = get_intervals(log_y, y_N_plus, y_N_0, eps=eps)
 
-        estimated_lfc = (log_mu_y - log_mu_x) / np.log(2)
+        if x_N_plus + y_N_plus == 0:
+            # Convention 0 / 0 = 1
+            estimated_lfc = 0.0
+        else:
+            estimated_lfc = (log_mu_y - log_mu_x) / np.log(2)
 
         estimated_lfcs[g] = estimated_lfc
     return estimated_lfcs
