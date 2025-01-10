@@ -1,4 +1,5 @@
 import numpy as np
+import scipy.stats as stats
 
 
 def digamma(x):
@@ -39,12 +40,6 @@ def get_intervals(log_x, a, b, z=1.96, model='lognormal', eps=0.):
     n = log_x.size
     if n > 0:
         _, mu_bar, sigma_bar = intervals_ln(log_x, n, z)
-
-        # this trick is good to increase accuracy of the mean estimate while the estimator remains asymptotically unbiased
-        # n_tot = a + b
-        # mu_bar *= n / n_tot
-        # sigma_bar *= (n - 1) / (n_tot - 1)
-
         squared_standard_error_ln = np.var(log_x) / n + np.var(log_x) ** 2 / (2 * (n + 1))
     else:
         # if there are no positive values, the mean estimate will be based only on log Beta mean
@@ -96,25 +91,26 @@ def get_intervals_synthetic_data(true_mu, true_sigma_2, true_theta, experiments=
     return intervals, estimated_means
 
 
-def get_ZILN_lfcs(X, Y, eps=0.):
+def get_ZILN_lfcs(X, Y, eps=0., return_p_vals=False):
     # Assuming X and Y are numpy arrays of raw counts
     # X: ctrl group (n_cells_x x n_genes)
     # Y: treatment group (n_cells_y x n_genes)
 
     n_genes = X.shape[-1]
     estimated_lfcs = np.zeros(n_genes)
+    p_vals = np.zeros(n_genes)
     for g in range(n_genes):
         x = X[:, g]
         x_N_plus = np.sum(x > 0, axis=0)
         x_N_0 = np.sum(x == 0, axis=0)
         log_x = np.log(x[x > 0])
-        _, log_mu_x, _ = get_intervals(log_x, x_N_plus, x_N_0, eps=eps ** x_N_plus)
+        _, log_mu_x, se_x = get_intervals(log_x, x_N_plus, x_N_0, eps=eps ** x_N_plus)
 
         y = Y[:, g]
         y_N_plus = np.sum(y > 0, axis=0)
         y_N_0 = np.sum(y == 0, axis=0)
         log_y = np.log(y[y > 0])
-        _, log_mu_y, _ = get_intervals(log_y, y_N_plus, y_N_0, eps=eps ** y_N_plus)
+        _, log_mu_y, se_y = get_intervals(log_y, y_N_plus, y_N_0, eps=eps ** y_N_plus)
 
         if x_N_plus + y_N_plus == 0:
             # Convention 0 / 0 = 1
@@ -123,6 +119,9 @@ def get_ZILN_lfcs(X, Y, eps=0.):
             estimated_lfc = (log_mu_y - log_mu_x) / np.log(2)
 
         estimated_lfcs[g] = estimated_lfc
+        p_vals[g] = compute_p_vals(log_mu_x, log_mu_y, se_x / np.log(2), se_y / np.log(2))
+    if return_p_vals:
+        return estimated_lfcs, p_vals
     return estimated_lfcs
 
 
@@ -157,3 +156,13 @@ def get_scanpy_lfcs(X, Y, normalize=True):
 def transform(z):
     # log(10000 * z / z.sum(over genes for each cell) + 1)
     return np.log((z * 1e4 / z.sum(1, keepdims=True)) + 1)
+
+
+def compute_p_vals(mean1, se1, mean2, se2):
+    # Compute the test statistic
+    z_stat = (mean1 - mean2) / ((se1 ** 2 + se2 ** 2) ** 0.5)
+
+    # Compute the p-value for the two-tailed test
+    p_value = 2 * (1 - stats.norm.cdf(abs(z_stat)))
+
+    return p_value
