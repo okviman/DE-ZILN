@@ -20,7 +20,7 @@ def intervals_ln(log_x, n, z=1.96):
     mu_bar = np.mean(log_x)
     sigma_bar = np.var(log_x)
 
-    se = np.sqrt(sigma_bar / n + sigma_bar ** 2 / (2 * (n + 1)))
+    se = np.sqrt(sigma_bar / n + sigma_bar ** 2 / (2 * (n - 1)))
     log_intervals = mu_bar + sigma_bar / 2 + z * np.array([-se, se])
     antilog_interval = np.exp(log_intervals)
     return antilog_interval, mu_bar, sigma_bar
@@ -38,9 +38,9 @@ def get_intervals(log_x, a, b, z=1.96, model='lognormal', eps=0.):
     if model == 'naive':
         return interval_naive(log_x, b, z)
     n = log_x.size
-    if n > 0:
+    if n > 1:
         _, mu_bar, sigma_bar = intervals_ln(log_x, n, z)
-        squared_standard_error_ln = np.var(log_x) / n + np.var(log_x) ** 2 / (2 * (n + 1))
+        squared_standard_error_ln = sigma_bar / n + (sigma_bar ** 2) / (2 * (n - 1))
     else:
         # if there are no positive values, the mean estimate will be based only on log Beta mean
         mu_bar, sigma_bar = 0, 0
@@ -119,7 +119,8 @@ def get_ZILN_lfcs(X, Y, eps=0., return_p_vals=False):
             estimated_lfc = (log_mu_y - log_mu_x) / np.log(2)
 
         estimated_lfcs[g] = estimated_lfc
-        p_vals[g] = compute_p_vals(log_mu_x, log_mu_y, se_x / np.log(2), se_y / np.log(2))
+        # no need to divide all terms by log(2) since they cancel in the z stat calculation
+        p_vals[g] = compute_p_vals(log_mu_x, log_mu_y, se_x, se_y)
     if return_p_vals:
         return estimated_lfcs, p_vals
     return estimated_lfcs
@@ -158,7 +159,7 @@ def transform(z):
     return np.log((z * 1e4 / z.sum(1, keepdims=True)) + 1)
 
 
-def compute_p_vals(mean1, se1, mean2, se2):
+def compute_p_vals(mean1, mean2, se1, se2):
     # Compute the test statistic
     z_stat = (mean1 - mean2) / ((se1 ** 2 + se2 ** 2) ** 0.5)
 
