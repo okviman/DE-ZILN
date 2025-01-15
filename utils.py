@@ -45,7 +45,7 @@ def get_intervals(log_x, a, b, z=1.96, model='lognormal', eps=0.):
         # if there are only zero or one positive values, the mean estimate will be based only on log Beta mean
         mu_bar, sigma_bar = 0, 0
         squared_standard_error_ln = 0
-    _, mu_log_beta, var_log_beta = intervals_beta(a + eps, b + eps, z)
+    _, mu_log_beta, var_log_beta = intervals_beta(a + eps ** n, b + eps ** n, z)
 
     squared_standard_error_log_beta = var_log_beta
     se = np.sqrt(squared_standard_error_ln + squared_standard_error_log_beta)
@@ -56,8 +56,6 @@ def get_intervals(log_x, a, b, z=1.96, model='lognormal', eps=0.):
     log_intervals = log_mean_estimate + z * np.array([-se, se])
     antilog_interval = np.exp(log_intervals)
     return antilog_interval, log_mean_estimate, se
-
-
 
 def interval_naive(log_x, N_0, z=1.96):
     zeros = np.zeros(N_0)
@@ -104,23 +102,28 @@ def get_ZILN_lfcs(X, Y, eps=0., return_p_vals=False):
         x_N_plus = np.sum(x > 0, axis=0)
         x_N_0 = np.sum(x == 0, axis=0)
         log_x = np.log(x[x > 0])
-        _, log_mu_x, se_x = get_intervals(log_x, x_N_plus, x_N_0, eps=eps ** x_N_plus)
 
         y = Y[:, g]
         y_N_plus = np.sum(y > 0, axis=0)
         y_N_0 = np.sum(y == 0, axis=0)
         log_y = np.log(y[y > 0])
-        _, log_mu_y, se_y = get_intervals(log_y, y_N_plus, y_N_0, eps=eps ** y_N_plus)
 
         if x_N_plus + y_N_plus == 0:
             # Convention 0 / 0 = 1
             estimated_lfc = 0.0
+            p_vals[g] = 1e-90
+        # elif (y_N_plus == 0) | (x_N_plus == 0):
+        #     # LFC undefined
+        #     estimated_lfc = np.inf
+        #     p_vals[g] = 1e-90
         else:
+            _, log_mu_x, se_x = get_intervals(log_x, x_N_plus, x_N_0, eps=eps ** x_N_plus)
+            _, log_mu_y, se_y = get_intervals(log_y, y_N_plus, y_N_0, eps=eps ** y_N_plus)
             estimated_lfc = (log_mu_y - log_mu_x) / np.log(2)
+            # no need to divide all terms by log(2) since they cancel in the z stat calculation
+            p_vals[g] = compute_p_vals(log_mu_x, log_mu_y, se_x, se_y)
 
         estimated_lfcs[g] = estimated_lfc
-        # no need to divide all terms by log(2) since they cancel in the z stat calculation
-        p_vals[g] = compute_p_vals(log_mu_x, log_mu_y, se_x, se_y)
     if return_p_vals:
         return estimated_lfcs, p_vals
     return estimated_lfcs
@@ -139,6 +142,20 @@ def get_seurat_lfcs(X, Y, normalize=True):
         log_Y = np.log(Y + 1)
 
     return np.log2(np.mean(np.exp(log_Y) - 1, 0) + 1) - np.log2(np.mean(np.exp(log_X) - 1, 0) + 1)
+
+def get_new_seurat_lfcs(X, Y, normalize=True, eps=1e-9):
+    # Manual calculation of the LFC based on how seurat implements it.
+    # See Log fold-change calculation methods in https://www.biorxiv.org/content/10.1101/2022.05.09.490241v2.full.pdf
+    if normalize:
+        log_X = transform(X)
+    else:
+        log_X = np.log(X + 1)
+    if normalize:
+        log_Y = transform(Y)
+    else:
+        log_Y = np.log(Y + 1)
+
+    return np.log2((np.sum(np.exp(log_Y) - 1, 0) + eps) / Y.shape[0]) - np.log2((np.sum(np.exp(log_X) - 1, 0) + eps) / X.shape[0])
 
 
 def get_scanpy_lfcs(X, Y, normalize=True):
