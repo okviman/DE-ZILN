@@ -42,16 +42,18 @@ def get_intervals(log_x, a, b, z=1.96, model='lognormal', eps=0.):
         _, mu_bar, sigma_bar = intervals_ln(log_x, n, z)
         squared_standard_error_ln = sigma_bar / n + (sigma_bar ** 2) / (2 * (n - 1))
     else:
-        # if there are only zero or one positive values, the mean estimate will be based only on log Beta mean
+        # if there are only zero or one positive values, the mean estimate will be based on the log Beta mean
         mu_bar, sigma_bar = 0, 0
         squared_standard_error_ln = 0
-    _, mu_log_beta, var_log_beta = intervals_beta(a + eps ** n, b + eps ** n, z)
+    _, mu_log_beta, var_log_beta = intervals_beta(a + eps ** n, b, z)
 
     squared_standard_error_log_beta = var_log_beta
     se = np.sqrt(squared_standard_error_ln + squared_standard_error_log_beta)
 
     # estimate of the log of the mean of the ZILN
-    log_mean_estimate = mu_bar + sigma_bar / 2 + mu_log_beta   #+ var_log_beta / 2
+    a_hat = a + eps ** n
+    log_mean_estimate = mu_bar + sigma_bar / 2 + np.log(a_hat / (a + b))
+    # log_mean_estimate = mu_bar + sigma_bar / 2 + mu_log_beta + var_log_beta / 2
 
     log_intervals = log_mean_estimate + z * np.array([-se, se])
     antilog_interval = np.exp(log_intervals)
