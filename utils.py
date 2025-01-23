@@ -143,8 +143,8 @@ def get_DELN_lfcs(Y, X, normalize=True):
     n_prime = X.shape[0]
 
     # compute #non-zero counts in each gene
-    n_plus = np.sum(Y == 0, axis=0)
-    n_plus_prime = np.sum(X == 0, axis=0)
+    n_plus = np.sum(Y > 0, axis=0)
+    n_plus_prime = np.sum(X > 0, axis=0)
 
     # \hat{a}
     a_hat_Y = np.sum(Y > 0, axis=0) + eps ** (1 + n_plus)
