@@ -131,6 +131,50 @@ def get_ZILN_lfcs(X, Y, eps=0., return_p_vals=False):
     return estimated_lfcs
 
 
+def get_DELN_lfcs(Y, X, normalize=True):
+    # Y is (n_cells, n_genes)
+    eps = 1e-9
+
+    if normalize:
+        # add normalization
+        pass
+
+    n = Y.shape[0]
+    n_prime = X.shape[0]
+
+    # compute #non-zero counts in each gene
+    n_plus = np.sum(Y == 0, axis=0)
+    n_plus_prime = np.sum(X == 0, axis=0)
+
+    # \hat{a}
+    a_hat_Y = np.sum(Y > 0, axis=0) + eps ** (1 + n_plus)
+    a_hat_X = np.sum(X > 0, axis=0) + eps ** (1 + n_plus_prime)
+
+    # compute \log2\hat{theta} for each gene
+    log2_theta_hat_Y = np.log2(a_hat_Y / n)
+    log2_theta_hat_X = np.log2(a_hat_X / n_prime)
+
+    # compute sample mean of positive counts
+    log2_m_Y = np.log2(np.sum(Y[Y > 0], axis=0) / n_plus)
+    log2_m_X = np.log2(np.sum(X[X > 0], axis=0) / n_plus_prime)
+
+    lfc = (log2_theta_hat_Y + log2_m_Y) - (log2_theta_hat_X + log2_m_X)
+
+    # compute standard errors
+    se_Y_1 = trigamma(a_hat_Y) - trigamma(n)
+    se_Y_2 = np.log(1 + np.var(Y[Y > 0], axis=0) / (n_plus * (2 ** log2_m_Y)))
+    se_Y = np.sqrt(se_Y_1 + se_Y_2) / np.log(2)
+
+    se_X_1 = trigamma(a_hat_X) - trigamma(n_prime)
+    se_X_2 = np.log(1 + np.var(X[X > 0], axis=0) / (n_plus_prime * (2 ** log2_m_X)))
+    se_X = np.sqrt(se_X_1 + se_X_2) / np.log(2)
+
+    p_vals = compute_p_vals(log2_theta_hat_Y + log2_m_Y, log2_theta_hat_X + log2_m_X, se_Y, se_X)
+
+    return lfc, p_vals
+
+
+
 def get_seurat_lfcs(X, Y, normalize=True):
     # Manual calculation of the LFC based on how seurat implements it.
     # See Log fold-change calculation methods in https://www.biorxiv.org/content/10.1101/2022.05.09.490241v2.full.pdf
