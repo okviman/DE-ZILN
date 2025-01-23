@@ -131,42 +131,46 @@ def get_ZILN_lfcs(X, Y, eps=0., return_p_vals=False):
     return estimated_lfcs
 
 
-def get_DELN_lfcs(Y, X, normalize=True):
+def get_DELN_lfcs(Y_, X_, normalize=True):
     # Y is (n_cells, n_genes)
     eps = 1e-9
 
     if normalize:
         # add normalization
         pass
-
+    Y = Y_.astype(float).copy()
     n = Y.shape[0]
-    n_prime = X.shape[0]
+    Y[Y <= 0] = np.nan  # Replace all non-positive with NaN
+    pos_mean_Y = np.nanmean(Y, axis=0)
+    n_plus = n - np.sum(np.isnan(Y), 0)
 
-    # compute #non-zero counts in each gene
-    n_plus = np.sum(Y > 0, axis=0)
-    n_plus_prime = np.sum(X > 0, axis=0)
+    X = X_.astype(float).copy()
+    n_prime = X.shape[0]
+    X[X <= 0] = np.nan  # Replace all non-positive with NaN
+    pos_mean_X = np.nanmean(X, axis=0)
+    n_plus_prime = n_prime - np.sum(np.isnan(X), 0)
 
     # \hat{a}
-    a_hat_Y = np.sum(Y > 0, axis=0) + eps ** (1 + n_plus)
-    a_hat_X = np.sum(X > 0, axis=0) + eps ** (1 + n_plus_prime)
+    a_hat_Y = n_plus + (eps ** (1 + n_plus))
+    a_hat_X = n_plus_prime + (eps ** (1 + n_plus_prime))
 
     # compute \log2\hat{theta} for each gene
     log2_theta_hat_Y = np.log2(a_hat_Y / n)
     log2_theta_hat_X = np.log2(a_hat_X / n_prime)
 
     # compute sample mean of positive counts
-    log2_m_Y = np.log2(np.sum(Y[Y > 0], axis=0) / n_plus)
-    log2_m_X = np.log2(np.sum(X[X > 0], axis=0) / n_plus_prime)
+    log2_m_Y = np.log2(pos_mean_Y)
+    log2_m_X = np.log2(pos_mean_X)
 
     lfc = (log2_theta_hat_Y + log2_m_Y) - (log2_theta_hat_X + log2_m_X)
 
     # compute standard errors
     se_Y_1 = trigamma(a_hat_Y) - trigamma(n)
-    se_Y_2 = np.log(1 + np.var(Y[Y > 0], axis=0) / (n_plus * (2 ** log2_m_Y)))
+    se_Y_2 = np.log(1 + np.nanvar(Y, axis=0) / (n_plus * (2 ** log2_m_Y)))
     se_Y = np.sqrt(se_Y_1 + se_Y_2) / np.log(2)
 
     se_X_1 = trigamma(a_hat_X) - trigamma(n_prime)
-    se_X_2 = np.log(1 + np.var(X[X > 0], axis=0) / (n_plus_prime * (2 ** log2_m_X)))
+    se_X_2 = np.log(1 + np.nanvar(X, axis=0) / (n_plus_prime * (2 ** log2_m_X)))
     se_X = np.sqrt(se_X_1 + se_X_2) / np.log(2)
 
     p_vals = compute_p_vals(log2_theta_hat_Y + log2_m_Y, log2_theta_hat_X + log2_m_X, se_Y, se_X)
