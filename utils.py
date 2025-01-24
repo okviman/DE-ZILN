@@ -131,7 +131,7 @@ def get_ZILN_lfcs(X, Y, eps=0., return_p_vals=False):
     return estimated_lfcs
 
 
-def get_DELN_lfcs(Y_, X_, normalize=True):
+def get_DELN_lfcs(Y_, X_, normalize=True, test='t'):
     # Y is (n_cells, n_genes)
     eps = 1e-9
 
@@ -141,8 +141,8 @@ def get_DELN_lfcs(Y_, X_, normalize=True):
     Y = Y_.astype(float).copy()
     n = Y.shape[0]
     Y[Y <= 0] = np.nan  # Replace all non-positive with NaN
-    pos_mean_Y = np.nanmean(Y, axis=0)
     n_plus = n - np.sum(np.isnan(Y), 0)
+    pos_mean_Y = np.nanmean(Y, axis=0)
 
     X = X_.astype(float).copy()
     n_prime = X.shape[0]
@@ -166,17 +166,20 @@ def get_DELN_lfcs(Y_, X_, normalize=True):
 
     # compute standard errors
     se_Y_1 = trigamma(a_hat_Y) - trigamma(n)
-    se_Y_2 = np.log(1 + np.nanvar(Y, axis=0) / (n_plus * (2 ** log2_m_Y)))
+    se_Y_2 = np.log(1 + np.nanvar(Y, axis=0) / (n_plus * (2 ** log2_m_Y) ** 2))
     se_Y = np.sqrt(se_Y_1 + se_Y_2) / np.log(2)
 
     se_X_1 = trigamma(a_hat_X) - trigamma(n_prime)
-    se_X_2 = np.log(1 + np.nanvar(X, axis=0) / (n_plus_prime * (2 ** log2_m_X)))
+    se_X_2 = np.log(1 + np.nanvar(X, axis=0) / (n_plus_prime * (2 ** log2_m_X) ** 2))
     se_X = np.sqrt(se_X_1 + se_X_2) / np.log(2)
 
-    p_vals = compute_p_vals(log2_theta_hat_Y + log2_m_Y, log2_theta_hat_X + log2_m_X, se_Y, se_X)
+    if test == 't':
+        statistic, p_vals = get_t_statistic(log2_theta_hat_Y + log2_m_Y, log2_theta_hat_X + log2_m_X, se_Y, se_X)
+    else:
+        # z-test
+        statistic, p_vals = compute_p_vals(log2_theta_hat_Y + log2_m_Y, log2_theta_hat_X + log2_m_X, se_Y, se_X)
 
     return lfc, p_vals
-
 
 
 def get_seurat_lfcs(X, Y, normalize=True):
@@ -233,4 +236,7 @@ def compute_p_vals(mean1, mean2, se1, se2):
     # Compute the p-value for the two-tailed test
     p_value = 2 * (1 - stats.norm.cdf(abs(z_stat)))
 
-    return p_value
+    return z_stat, p_value
+
+def get_t_statistic(mean1, mean2, se1, se2):
+    return stats.ttest_ind_from_stats(mean1, se1, 1, mean2, se2, 1, equal_var=False)
