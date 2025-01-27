@@ -33,7 +33,7 @@ def scanpy_sig_test(X, Y, method='t-test'):
     de_results["gene"] = [int(gene.replace("Gene", "")) for gene in de_results["gene"]]
     gene_idx_sorted = np.argsort(de_results["gene"])
 
-    return de_results["log2_fc"][gene_idx_sorted], de_results["p_value"][gene_idx_sorted]
+    return de_results["log2_fc"][gene_idx_sorted], de_results["p_adj"][gene_idx_sorted]
 
 
 def get_test_results(adj_p_vals, true_lfcs):
@@ -67,8 +67,8 @@ np.random.seed(0)
 nx = 1000
 ny = 1000
 n_genes = 1500
-mu1 = 10 + np.abs(np.random.normal(0, 1, (1, n_genes))) * np.random.binomial(1, 0.1, (1, n_genes))
-mu2 = 10  # + np.random.normal(0, 1, (1, n_genes)) * np.random.binomial(1, 0.1, (1, n_genes))
+mu1 = 100 + np.abs(np.random.normal(15, 5, (1, n_genes))) * np.random.binomial(1, 0.1, (1, n_genes))
+mu2 = 100
 d1 = 0.2
 d2 = 0.1
 
@@ -77,19 +77,26 @@ r2 = 1 / d2
 p1 = 1 / (1 + d1 * mu1)
 p2 = 1 / (1 + d2 * mu2)
 
-print("Variance X: ", np.mean((1 - p1) * r1 / (p1 ** 2)), "Other parameterization: ", np.mean(mu1 + mu1 ** 2 * d1))
+print("Variance X: ", np.mean((1 - p1) * r1 / (p1 ** 2)))
+print("P(X = 0) = ", p1 ** r1)
+print("P(Y = 0) = ", p2 ** r2)
 
 # Generate synthetic gene expression data
 X = np.random.negative_binomial(n=r1, p=p1, size=(nx, n_genes))
 Y = np.random.negative_binomial(n=r2, p=p2, size=(ny, n_genes))
 
+np.save("/home/oskar/phd/DE-ZILN/simul/test/NB_t_test_data/X.npy", X)
+np.save("/home/oskar/phd/DE-ZILN/simul/test/NB_t_test_data/Y.npy", Y)
+
 true_lfcs = np.log2(mu2 / mu1)
 
-sc_lfcs, sc_p_vals = scanpy_sig_test(X, Y)
-sc_adj_pvals = smm.multipletests(sc_p_vals, alpha=0.05, method='fdr_bh')[1]
+sc_lfcs, sc_adj_pvals = scanpy_sig_test(X, Y)
+# sc_adj_pvals = smm.multipletests(sc_p_vals, alpha=0.05, method='fdr_bh')[1]
 _, ax = plt.subplots(1, 2, figsize=(10, 10))
-ax[0].scatter(sc_lfcs, -np.log10(sc_adj_pvals))
-ax[0].scatter(true_lfcs, -np.log10(sc_adj_pvals))
+ax[0].scatter(sc_lfcs, -np.log10(sc_adj_pvals), label="Scanpy Estimates")
+non_de_idx = true_lfcs[0] == 0
+ax[0].scatter(sc_lfcs[non_de_idx], -np.log10(sc_adj_pvals)[non_de_idx], label='True Non-DEGs', alpha=0.5, marker='x')
+# ax[0].scatter(true_lfcs, -np.log10(sc_adj_pvals))
 ax[0].axhline(-np.log10(0.05), -1000, 1000, color='red', label='adj $p$ < 0.05')
 ax[0].set_ylabel("$-\log_{10}(p)$")
 ax[0].set_xlabel('Estimated LFC')
@@ -98,7 +105,10 @@ ax[1].scatter(true_lfcs, sc_lfcs, label='Estimated LFCs')
 ax[1].scatter(true_lfcs, true_lfcs, label='True LFCs')
 ax[1].scatter(true_lfcs[0, sc_adj_pvals < 0.05], sc_lfcs[sc_adj_pvals < 0.05], color='red', label='DE Classified')
 ax[1].legend()
+ax[1].set_ylabel("LFC")
+ax[1].set_xlabel("LFC")
 plt.suptitle('Scanpy')
+plt.tight_layout()
 plt.show()
 print("Scanpy Test Results: ")
 get_test_results(sc_adj_pvals, true_lfcs)
@@ -109,8 +119,9 @@ Y = 1e4 * Y / Y.sum(1, keepdims=True)
 DELN_lfcs, DELN_p_vals = get_DELN_lfcs(Y, X, test='t')
 DELN_adj_pvals = smm.multipletests(DELN_p_vals, alpha=0.05, method='fdr_bh')[1]
 _, ax = plt.subplots(1, 2, figsize=(10, 10))
-ax[0].scatter(DELN_lfcs, -np.log10(DELN_adj_pvals), label='DELN LFC vs DELN adj $p$')
-ax[0].scatter(true_lfcs, -np.log10(DELN_adj_pvals), label='True LFC vs DELN adj $p$')
+ax[0].scatter(DELN_lfcs, -np.log10(DELN_adj_pvals), label='DELN Estimates')
+# ax[0].scatter(true_lfcs, -np.log10(DELN_adj_pvals), label='True LFC vs DELN adj $p$')
+ax[0].scatter(DELN_lfcs[non_de_idx], -np.log10(DELN_adj_pvals)[non_de_idx], label='True Non-DEGs', alpha=0.5, marker='x')
 ax[0].axhline(-np.log10(0.05), -1000, 1000, color='red', label='adj $p$ < 0.05')
 ax[0].set_ylabel("$-\log_{10}(p)$")
 ax[0].legend()
@@ -118,8 +129,11 @@ ax[0].set_xlabel('Estimated LFC')
 ax[1].scatter(true_lfcs, DELN_lfcs, label='Estimated LFCs')
 ax[1].scatter(true_lfcs, true_lfcs, label='True LFCs')
 ax[1].scatter(true_lfcs[0, DELN_adj_pvals < 0.05], sc_lfcs[DELN_adj_pvals < 0.05], color='red', label='DE Classified')
+ax[1].set_ylabel("LFC")
+ax[1].set_xlabel("LFC")
 ax[1].legend()
 plt.suptitle('DELN')
+plt.tight_layout()
 plt.show()
 
 print("DELN Test Results: ")
