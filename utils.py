@@ -1,6 +1,6 @@
 import numpy as np
 import scipy.stats as stats
-
+from scipy.stats.distributions import t
 
 def digamma(x):
     return np.log(x) - 1 / (2 * x)
@@ -174,7 +174,8 @@ def get_DELN_lfcs(Y_, X_, normalize=True, test='t'):
     se_X = np.sqrt(se_X_1 + se_X_2) / np.log(2)
 
     if test == 't':
-        statistic, p_vals = get_t_statistic(log2_theta_hat_Y + log2_m_Y, log2_theta_hat_X + log2_m_X, se_Y, se_X)
+        statistic, p_vals = get_t_statistic(log2_theta_hat_Y + log2_m_Y, log2_theta_hat_X + log2_m_X,
+                                            se_Y, se_X, n, n_prime)
     else:
         # z-test
         statistic, p_vals = compute_p_vals(log2_theta_hat_Y + log2_m_Y, log2_theta_hat_X + log2_m_X, se_Y, se_X)
@@ -238,5 +239,14 @@ def compute_p_vals(mean1, mean2, se1, se2):
 
     return z_stat, p_value
 
-def get_t_statistic(mean1, mean2, se1, se2):
-    return stats.ttest_ind_from_stats(mean1, se1, 1, mean2, se2, 1, equal_var=False)
+def get_t_statistic(mean1, mean2, se1, se2, n1, n2):
+    # implements two-sided t-test
+    nu1, nu2 = n1 - 1, n2 - 1
+    df = (se1 ** 2 + se2 ** 2) ** 2 / (se1 ** 4 / nu1 + se2 ** 4 / nu2)
+    d = mean1 - mean2
+    denom = ((se1 ** 2 + se2 ** 2) ** 0.5)
+    t_statistic = d / denom
+    t_dist = t(df)
+    p_value = 2 * t_dist.sf(np.abs(t_statistic))
+    return t_statistic, p_value
+
