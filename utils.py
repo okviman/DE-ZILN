@@ -136,8 +136,9 @@ def get_DELN_lfcs(Y_, X_, normalize=True, test='t'):
     eps = 1e-9
 
     if normalize:
-        # add normalization
-        pass
+        X_ = 1e4 * X_ / X_.sum(1, keepdims=True)
+        Y_ = 1e4 * Y_ / Y_.sum(1, keepdims=True)
+
     Y = Y_.astype(float).copy()
     n = Y.shape[0]
     Y[Y <= 0] = np.nan  # Replace all non-positive with NaN

@@ -112,9 +112,9 @@ if __name__ == '__main__':
     nx = 1000
     ny = 1000
     n_genes = 1500
-    mu1 = 100 + np.abs(np.random.normal(15, 5, (1, n_genes))) * np.random.binomial(1, 0.1, (1, n_genes))
-    mu2 = 100
-    d1 = 0.2
+    mu1 = 10 + np.abs(np.random.normal(0, 5, (1, n_genes))) * np.random.binomial(1, 0.1, (1, n_genes))
+    mu2 = 10
+    d1 = 1.
     d2 = 0.1
 
     r1 = 1 / d1
@@ -156,8 +156,6 @@ if __name__ == '__main__':
     sc_results = get_test_results(sc_adj_pvals, true_lfcs)
 
 
-    X = 1e4 * X / X.sum(1, keepdims=True)
-    Y = 1e4 * Y / Y.sum(1, keepdims=True)
     DELN_lfcs, DELN_p_vals = get_DELN_lfcs(Y, X, test='t')
     DELN_adj_pvals = smm.multipletests(DELN_p_vals, alpha=0.05, method='fdr_bh')[1]
     _, ax = plt.subplots(1, 2, figsize=(20, 10))
