@@ -7,7 +7,7 @@ from scipy.stats import nbinom
 #    but Y has a LARGER variance => more dispersion => phi_Y > phi_X.
 # -----------------------------------------------------------------------------
 
-mu = 10.0
+mu = 100.0
 
 # We use the "number of successes" (r) and "success probability" (p) parameterization
 # in scipy.stats.nbinom.  In that convention:
@@ -18,7 +18,7 @@ mu = 10.0
 # Smaller r => larger variance => more dispersion.
 
 rX = 10  # larger r => less dispersion
-rY = 1  # smaller r => more dispersion
+rY = 4.  # smaller r => more dispersion
 
 phiX = 1 / rX
 phiY = 1 / rY
@@ -38,7 +38,7 @@ print("For Y: r = {}, p = {:.3f} => mean = {:.1f}, var = {:.1f}".format(
 # 2. Compute and plot the PMFs for X and Y up to some max count 'k_max'.
 # -----------------------------------------------------------------------------
 
-k_max = 40
+k_max = mu + 2 * np.sqrt((mu + mu ** 2 * 1 / rY))
 k_vals = np.arange(k_max+1)
 
 # PMFs

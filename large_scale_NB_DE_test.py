@@ -16,15 +16,16 @@ columns = ["method", "accuracy", "precision", "recall", "tpr", "tnr", "fpr", "fn
 df = pd.DataFrame(columns=columns)
 
 # dispersions
-d2 = 0.1
-for d1 in [0.1, 0.2, 1.]:
+d2 = 0.5
+non_de_mu = 10
+log_batch_factor = 0.
+for d1 in [0.25, 0.5, 1.]:
     # with probability 0.1, there is Gaussian noise added to a gene in group 1
     rep_count = 20
     for rep in range(rep_count):
         z1 = np.random.binomial(1, 0.1, (1, n_genes))
-        non_de_mu = 5
         mu1 = non_de_mu + np.abs(np.random.normal(0, 5, (1, n_genes))) * z1
-        mu2 = non_de_mu
+        mu2 = non_de_mu * np.exp(log_batch_factor)
 
         r1 = 1 / d1
         r2 = 1 / d2
@@ -48,5 +49,10 @@ for d1 in [0.1, 0.2, 1.]:
             results["dispersion"] = d1
             df = pd.concat([df, pd.DataFrame([results])], ignore_index=True)
 
-df.to_csv("/home/oskar/phd/DE-ZILN/simul/test/NB_test_results/nde_mu5/d1_vs_d2_01_nde_mu_5.csv", index=False)
+df.to_csv(f"/Users/oskarkviman/Documents/"
+          f"phd/DE-ZILN/simul/"
+          f"test/NB_test_results/"
+          f"nde_mu{int(non_de_mu)}/"
+          f"d1_vs_d2_01_nde_mu_{int(non_de_mu)}.csv",
+          index=False)
 

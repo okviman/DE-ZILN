@@ -23,10 +23,10 @@ np.random.seed(0)
 nx = 1000
 ny = 1000
 n_genes = 1500
-mu1 = 100 + np.abs(np.random.normal(15, 5, (1, n_genes))) * np.random.binomial(1, 0.1, (1, n_genes))
-mu2 = 100
-d1 = 0.2
-d2 = 0.1
+mu1 = 10 + np.abs(np.random.normal(15, 5, (1, n_genes))) * np.random.binomial(1, 0.1, (1, n_genes))
+mu2 = 10
+d1 = .25
+d2 = 0.5
 
 r1 = 1 / d1
 r2 = 1 / d2
@@ -60,9 +60,9 @@ confidence_intervals = (mean_Y - mean_X) / np.log(2) + 1.96 * np.array([-se, se]
 print(f"Estimated LFC is below CI {np.sum(sc_lfcs < confidence_intervals[0])} times")
 print(f"Estimated LFC is above CI {np.sum(sc_lfcs > confidence_intervals[1])} times")
 plt.rcParams.update({'font.size': 20})
-plt.errorbar(true_lfcs[0], (mean_Y - mean_X) / np.log(2), yerr=1.96 * se, fmt='o', label='Estimated CIs')
-plt.plot(true_lfcs[0], true_lfcs[0], 'o', label='True LFCs')
+plt.errorbar(true_lfcs[0], (mean_Y - mean_X) / np.log(2), yerr=1.96 * se, fmt='none', label='Estimated CIs', color='green')
 plt.plot(true_lfcs[0], sc_lfcs, 'o', label='Estimated LFCs')
+plt.plot(true_lfcs[0], true_lfcs[0], 'o', label='True LFCs')
 plt.xlabel('LFCs')
 plt.ylabel('LFCs')
 plt.title('Scanpy')

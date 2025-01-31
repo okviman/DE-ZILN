@@ -135,21 +135,33 @@ def get_DELN_lfcs(Y_, X_, normalize=True, test='t'):
     # Y is (n_cells, n_genes)
     eps = 1e-9
 
-    if normalize:
-        X_ = 1e4 * X_ / X_.sum(1, keepdims=True)
-        Y_ = 1e4 * Y_ / Y_.sum(1, keepdims=True)
-
     Y = Y_.astype(float).copy()
     n = Y.shape[0]
     Y[Y <= 0] = np.nan  # Replace all non-positive with NaN
     n_plus = n - np.sum(np.isnan(Y), 0)
-    pos_mean_Y = np.nanmean(Y, axis=0)
 
     X = X_.astype(float).copy()
     n_prime = X.shape[0]
-    X[X <= 0] = np.nan  # Replace all non-positive with NaN
-    pos_mean_X = np.nanmean(X, axis=0)
+    X[X <= 0] = np.nan
     n_plus_prime = n_prime - np.sum(np.isnan(X), 0)
+
+    if normalize:
+
+        X = 1e4 * X / np.nansum(X, 1, keepdims=True)
+        Y = 1e4 * Y / np.nansum(Y, 1, keepdims=True)
+        """
+        denom_Y = np.exp(np.nanmean(np.log(Y), 0))
+        c_Y = np.nanmedian(Y / denom_Y, 1, keepdims=True)
+        Y /= c_Y
+        Y /= np.nansum(denom_Y, 1, keepdims=True) 
+
+        denom_X = np.exp(np.nanmean(np.log(X), 0))
+        c_X = np.nanmedian(X / denom_X, 1, keepdims=True)
+        X /= c_X
+        """
+
+    pos_mean_Y = np.nanmean(Y, axis=0)
+    pos_mean_X = np.nanmean(X, axis=0)
 
     # \hat{a}
     a_hat_Y = n_plus + (eps ** (1 + n_plus))

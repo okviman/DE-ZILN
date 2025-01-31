@@ -1,7 +1,7 @@
 import pandas as pd
 
-df1 = pd.read_csv("/home/oskar/phd/DE-ZILN/simul/test/NB_test_results/d1_vs_d2_01_nde_mu_100.csv")
-df2 = pd.read_csv("/home/oskar/phd/DE-ZILN/simul/test/NB_test_results/results.csv")
+df1 = pd.read_csv("./simul/test/NB_test_results/nde_mu10/d1_vs_d2_01_nde_mu_10.csv")
+df2 = pd.read_csv("./simul/test/NB_test_results/nde_mu10/results.csv")
 
 df1.drop(columns=['recall'], inplace=True)
 
@@ -10,6 +10,7 @@ df2['method'] = df2['method'].apply(lambda x: 'Seurat ' + x)
 
 df = pd.concat([df1, df2], ignore_index=True)
 df_avg = df.groupby(['method', 'dispersion']).mean().reset_index().drop(columns=['rep_no'])
+
 df_avg['method'] = df_avg['method'].apply(lambda x: x.replace('_', ' '))
 df_avg['method'] = df_avg['method'].apply(lambda x: x.replace('Seurat t', 'Seurat t-test'))
 df_avg['method'] = df_avg['method'].apply(lambda x: x.replace('Seurat wilcox', 'Seurat wilcoxon'))

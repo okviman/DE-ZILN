@@ -109,13 +109,14 @@ def generate_latex_table(results1, results2, caption="Comparison of Results", la
 
 if __name__ == '__main__':
     np.random.seed(0)
+    log_batch_factor = 1.
     nx = 1000
     ny = 1000
     n_genes = 1500
     mu1 = 10 + np.abs(np.random.normal(0, 5, (1, n_genes))) * np.random.binomial(1, 0.1, (1, n_genes))
-    mu2 = 10
+    mu2 = 10 * np.exp(log_batch_factor)
     d1 = 1.
-    d2 = 0.1
+    d2 = 1.
 
     r1 = 1 / d1
     r2 = 1 / d2
@@ -129,7 +130,7 @@ if __name__ == '__main__':
     X = np.random.negative_binomial(n=r1, p=p1, size=(nx, n_genes))
     Y = np.random.negative_binomial(n=r2, p=p2, size=(ny, n_genes))
 
-    true_lfcs = np.log2(mu2 / mu1)
+    true_lfcs = np.log2((mu2 * np.exp(-log_batch_factor)) / mu1)
 
     sc_lfcs, sc_adj_pvals = scanpy_sig_test(X, Y, method='t-test')
     plt.rcParams.update({'font.size': 20})
