@@ -131,7 +131,7 @@ def get_ZILN_lfcs(X, Y, eps=0., return_p_vals=False):
     return estimated_lfcs
 
 
-def get_DELN_lfcs(Y_, X_, normalize=True, test='t'):
+def get_DELN_lfcs(Y_, X_, normalize=True, test='t', return_standard_error=False):
     # Y is (n_cells, n_genes)
     eps = 1e-9
 
@@ -146,19 +146,8 @@ def get_DELN_lfcs(Y_, X_, normalize=True, test='t'):
     n_plus_prime = n_prime - np.sum(np.isnan(X), 0)
 
     if normalize:
-
         X = 1e4 * X / np.nansum(X, 1, keepdims=True)
         Y = 1e4 * Y / np.nansum(Y, 1, keepdims=True)
-        """
-        denom_Y = np.exp(np.nanmean(np.log(Y), 0))
-        c_Y = np.nanmedian(Y / denom_Y, 1, keepdims=True)
-        Y /= c_Y
-        Y /= np.nansum(denom_Y, 1, keepdims=True) 
-
-        denom_X = np.exp(np.nanmean(np.log(X), 0))
-        c_X = np.nanmedian(X / denom_X, 1, keepdims=True)
-        X /= c_X
-        """
 
     pos_mean_Y = np.nanmean(Y, axis=0)
     pos_mean_X = np.nanmean(X, axis=0)
@@ -193,6 +182,8 @@ def get_DELN_lfcs(Y_, X_, normalize=True, test='t'):
         # z-test
         statistic, p_vals = compute_p_vals(log2_theta_hat_Y + log2_m_Y, log2_theta_hat_X + log2_m_X, se_Y, se_X)
 
+    if return_standard_error:
+        return lfc, p_vals, np.sqrt(se_X ** 2 + se_Y ** 2)
     return lfc, p_vals
 
 
