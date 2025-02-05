@@ -16,16 +16,24 @@ columns = ["method", "accuracy", "precision", "recall", "tpr", "tnr", "fpr", "fn
 df = pd.DataFrame(columns=columns)
 
 # dispersions
-d2 = 0.5
-non_de_mu = 10
-log_batch_factor = 0.
-for d1 in [0.25, 0.5, 1.]:
+d2 = .1
+non_de_mu = 100
+log_batch_factor = 1.
+for d1 in [0.1, 0.2, 1.]:
     # with probability 0.1, there is Gaussian noise added to a gene in group 1
     rep_count = 20
     for rep in range(rep_count):
         z1 = np.random.binomial(1, 0.1, (1, n_genes))
-        mu1 = non_de_mu + np.abs(np.random.normal(0, 5, (1, n_genes))) * z1
-        mu2 = non_de_mu * np.exp(log_batch_factor)
+        if non_de_mu == 10:
+            mu1 = non_de_mu + np.abs(np.random.normal(0, 5, (1, n_genes))) * z1
+        else:
+            mu1 = non_de_mu + np.random.normal(15, 5, (1, n_genes)) * z1
+        mu1 = np.tile(mu1, (nx, 1))
+        mu2 = non_de_mu * np.ones((ny, n_genes))
+
+        # the first half of all samples are batch effected
+        mu1[:nx // 2] *= np.exp(log_batch_factor)
+        mu2[:ny // 2] *= np.exp(log_batch_factor)
 
         r1 = 1 / d1
         r2 = 1 / d2
@@ -38,7 +46,7 @@ for d1 in [0.25, 0.5, 1.]:
         for method in ["DELN", "t-test", 't-test_overestim_var', 'wilcoxon']:
             if method == "DELN":
                 _, DELN_p_vals = get_DELN_lfcs(Y, X, test='t')
-                adj_pvals = smm.multipletests(DELN_p_vals, alpha=0.05, method='fdr_bh')[1]
+                adj_pvals = smm.multipletests(DELN_p_vals, alpha=0.05, method='bonferroni')[1]
             else:
                 _, adj_pvals = scanpy_sig_test(X, Y, method=method)
                 method = "Scanpy " + method
@@ -52,7 +60,7 @@ for d1 in [0.25, 0.5, 1.]:
 df.to_csv(f"/Users/oskarkviman/Documents/"
           f"phd/DE-ZILN/simul/"
           f"test/NB_test_results/"
-          f"nde_mu{int(non_de_mu)}/"
+          f"nde_mu{int(non_de_mu)}_be/"
           f"d1_vs_d2_01_nde_mu_{int(non_de_mu)}.csv",
           index=False)
 

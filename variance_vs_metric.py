@@ -25,7 +25,7 @@ d2_list = np.linspace(0.0001, 2, 20)
 
 var_1 = d1_list * base_mu ** 2 + base_mu
 var_2 = d2_list * base_mu ** 2 + base_mu
-metric = "accuracy"
+metric = "fpr"
 
 for i, d1 in enumerate(d1_list):
     results = {"sc": [], "DELN": []}
@@ -46,10 +46,8 @@ for i, d1 in enumerate(d1_list):
         else:
             sc_results = get_test_results(sc_adj_pvals, true_lfcs, verbose=False)
 
-        X = 1e4 * X / X.sum(1, keepdims=True)
-        Y = 1e4 * Y / Y.sum(1, keepdims=True)
         DELN_lfcs, DELN_p_vals = get_DELN_lfcs(Y, X, test='t')
-        DELN_adj_pvals = smm.multipletests(DELN_p_vals, alpha=0.05, method='fdr_bh')[1]
+        DELN_adj_pvals = smm.multipletests(DELN_p_vals, alpha=0.05, method='bonferroni')[1]
         if np.sum(DELN_adj_pvals >= 0.05) == n_genes:
             # 100% accuracy and 0% TPR --- conf_mat crashes in this setting
             deln_results = {"accuracy": 1., "fpr": 0.}
@@ -64,9 +62,9 @@ for i, d1 in enumerate(d1_list):
 sc_ax.set_xlabel(f'Var$(Y)$')
 # sc_ax.legend(loc='best')
 DELN_ax.set_xlabel(f'Var$(Y)$')
-DELN_ax.set_title('DELN')
+DELN_ax.set_title("LN's $t$-test")
 sc_ax.set_title('Scanpy')
-sc_ax.set_ylabel("Accuracy")
+sc_ax.set_ylabel("FPR")
 sc_ax.set_yticks(np.arange(0, 11) * 1 / 10)
 DELN_ax.legend(loc='best')
 plt.show()

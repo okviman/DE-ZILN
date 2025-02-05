@@ -131,7 +131,7 @@ def get_ZILN_lfcs(X, Y, eps=0., return_p_vals=False):
     return estimated_lfcs
 
 
-def get_DELN_lfcs(Y_, X_, normalize=True, test='t'):
+def get_DELN_lfcs(Y_, X_, normalize=True, test='t', normalization='CP10K'):
     # Y is (n_cells, n_genes)
     eps = 1e-9
 
@@ -145,20 +145,22 @@ def get_DELN_lfcs(Y_, X_, normalize=True, test='t'):
     X[X <= 0] = np.nan
     n_plus_prime = n_prime - np.sum(np.isnan(X), 0)
 
-    if normalize:
-
+    if normalize and (normalization == 'CP10K'):
         X = 1e4 * X / np.nansum(X, 1, keepdims=True)
         Y = 1e4 * Y / np.nansum(Y, 1, keepdims=True)
-        """
+
+    elif normalize and (normalization == 'median-of-ratios'):
+        # the normalization scheme proposed in DESeq2
         denom_Y = np.exp(np.nanmean(np.log(Y), 0))
+        denom_Y[np.isnan(denom_Y)] = 1  # Avoid division by NaN for unexpressed genes
         c_Y = np.nanmedian(Y / denom_Y, 1, keepdims=True)
         Y /= c_Y
-        Y /= np.nansum(denom_Y, 1, keepdims=True) 
 
         denom_X = np.exp(np.nanmean(np.log(X), 0))
+        denom_X[np.isnan(denom_X)] = 1  # Avoid division by NaN for unexpressed genes
         c_X = np.nanmedian(X / denom_X, 1, keepdims=True)
         X /= c_X
-        """
+
 
     pos_mean_Y = np.nanmean(Y, axis=0)
     pos_mean_X = np.nanmean(X, axis=0)

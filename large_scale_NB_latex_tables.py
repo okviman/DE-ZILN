@@ -1,7 +1,7 @@
 import pandas as pd
 
-df1 = pd.read_csv("./simul/test/NB_test_results/nde_mu10/d1_vs_d2_01_nde_mu_10.csv")
-df2 = pd.read_csv("./simul/test/NB_test_results/nde_mu10/results.csv")
+df1 = pd.read_csv("./simul/test/NB_test_results/nde_mu10_be/d1_vs_d2_01_nde_mu_10.csv")
+df2 = pd.read_csv("./simul/test/NB_test_results/nde_mu10_be/results.csv")
 
 df1.drop(columns=['recall'], inplace=True)
 
@@ -13,6 +13,7 @@ df_avg = df.groupby(['method', 'dispersion']).mean().reset_index().drop(columns=
 
 df_avg['method'] = df_avg['method'].apply(lambda x: x.replace('_', ' '))
 df_avg['method'] = df_avg['method'].apply(lambda x: x.replace('Seurat t', 'Seurat t-test'))
+df_avg['method'] = df_avg['method'].apply(lambda x: x.replace('DELN', r"\underbar{LN's $t$-test}"))
 df_avg['method'] = df_avg['method'].apply(lambda x: x.replace('Seurat wilcox', 'Seurat wilcoxon'))
 df_avg['method'] = df_avg['method'].apply(lambda x: x.replace('wilcoxon', 'Wilcoxon'))
 df_avg['method'] = df_avg['method'].apply(lambda x: x.replace('t-test', '$t$-test'))
