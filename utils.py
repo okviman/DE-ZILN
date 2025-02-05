@@ -131,7 +131,7 @@ def get_ZILN_lfcs(X, Y, eps=0., return_p_vals=False):
     return estimated_lfcs
 
 
-def get_DELN_lfcs(Y_, X_, normalize=True, test='t', normalization='CP10K'):
+def get_DELN_lfcs(Y_, X_, normalize=True, test='t', normalization='CP10K', return_standard_error=False):
     # Y is (n_cells, n_genes)
     eps = 1e-9
 
@@ -195,6 +195,8 @@ def get_DELN_lfcs(Y_, X_, normalize=True, test='t', normalization='CP10K'):
         # z-test
         statistic, p_vals = compute_p_vals(log2_theta_hat_Y + log2_m_Y, log2_theta_hat_X + log2_m_X, se_Y, se_X)
 
+    if return_standard_error:
+        return lfc, p_vals, np.sqrt(se_X ** 2 + se_Y ** 2)
     return lfc, p_vals
 
 
