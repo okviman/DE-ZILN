@@ -200,6 +200,84 @@ def get_DELN_lfcs(Y_, X_, normalize=True, test='t', normalization='CP10K', retur
     return lfc, p_vals
 
 
+def get_LN_lfcs(Y_, X_, normalize=True, test='t', normalization='CP10K', return_standard_error=False):
+    # Y is (n_cells, n_genes)
+
+    G = Y_.shape[1]
+    Y = Y_.astype(float).copy()
+    n = Y.shape[0]
+    Y[Y <= 0] = np.nan  # Replace all non-positive with NaN
+    n_plus = n - np.sum(np.isnan(Y), 0)
+    all_zeros_Y = (n_plus == 0)
+
+    X = X_.astype(float).copy()
+    n_prime = X.shape[0]
+    X[X <= 0] = np.nan
+    n_plus_prime = n_prime - np.sum(np.isnan(X), 0)
+    all_zeros_X = (n_plus_prime == 0)
+
+    if normalize and (normalization == 'CP10K'):
+        X = 1e4 * X / np.nansum(X, 1, keepdims=True)
+        Y = 1e4 * Y / np.nansum(Y, 1, keepdims=True)
+
+    elif normalize and (normalization == 'median-of-ratios'):
+        # the normalization scheme proposed in DESeq2
+        denom_Y = np.exp(np.nanmean(np.log(Y), 0))
+        denom_Y[np.isnan(denom_Y)] = 1  # Avoid division by NaN for unexpressed genes
+        c_Y = np.nanmedian(Y / denom_Y, 1, keepdims=True)
+        Y /= c_Y
+
+        denom_X = np.exp(np.nanmean(np.log(X), 0))
+        denom_X[np.isnan(denom_X)] = 1  # Avoid division by NaN for unexpressed genes
+        c_X = np.nanmedian(X / denom_X, 1, keepdims=True)
+        X /= c_X
+
+
+    pos_mean_Y = np.ones(G, dtype=np.float32)  # to avoid NaNs in LFC when all counts are zero
+    pos_mean_Y[~all_zeros_Y] = np.nanmean(Y[:, ~all_zeros_Y], axis=0)
+    pos_mean_X = np.ones(G, dtype=np.float32)
+    pos_mean_X[~all_zeros_X] = np.nanmean(X[:, ~all_zeros_X], axis=0)
+
+    # \hat{a}
+    a_hat_Y = np.ones(G, dtype=np.float32)  # to avoid NaNs in LFC when all counts are zero
+    a_hat_Y[~all_zeros_Y] = n_plus[~all_zeros_Y]
+
+    a_hat_X = np.ones(G, dtype=np.float32)
+    a_hat_X[~all_zeros_X] = n_plus_prime[~all_zeros_X]
+
+    # compute \log2\hat{theta} for each gene
+    log2_theta_hat_Y = np.log2(a_hat_Y / n)
+    log2_theta_hat_X = np.log2(a_hat_X / n_prime)
+
+    # compute sample mean of positive counts
+    log2_m_Y = np.log2(pos_mean_Y)
+    log2_m_X = np.log2(pos_mean_X)
+
+    lfc = (log2_theta_hat_Y + log2_m_Y) - (log2_theta_hat_X + log2_m_X)
+
+    # compute standard errors
+    se_Y_1 = trigamma(a_hat_Y) - trigamma(n)
+    se_Y_2 = np.ones(G, dtype=np.float32)  # to avoid NaNs in SE when all counts are zero
+    se_Y_2[~all_zeros_Y] = np.log(1 + np.nanvar(Y[:, ~all_zeros_Y], axis=0) / (n_plus[~all_zeros_Y] * (2 ** log2_m_Y[~all_zeros_Y]) ** 2))
+    se_Y = np.sqrt(se_Y_1 + se_Y_2) / np.log(2)
+
+    se_X_1 = trigamma(a_hat_X) - trigamma(n_prime)
+    se_X_2 = np.ones(G, dtype=np.float32)
+    se_X_2[~all_zeros_X] = np.log(1 + np.nanvar(X[:, ~all_zeros_X], axis=0) / (n_plus_prime[~all_zeros_X] * (2 ** log2_m_X[~all_zeros_X]) ** 2))
+    se_X = np.sqrt(se_X_1 + se_X_2) / np.log(2)
+
+    if test == 't':
+        statistic, p_vals = get_t_statistic(log2_theta_hat_Y + log2_m_Y, log2_theta_hat_X + log2_m_X,
+                                            se_Y, se_X, n, n_prime)
+    else:
+        # z-test
+        statistic, p_vals = compute_p_vals(log2_theta_hat_Y + log2_m_Y, log2_theta_hat_X + log2_m_X, se_Y, se_X)
+
+    if return_standard_error:
+        return lfc, p_vals, np.sqrt(se_X ** 2 + se_Y ** 2)
+    return lfc, p_vals
+
+
 def get_seurat_lfcs(X, Y, normalize=True):
     # Manual calculation of the LFC based on how seurat implements it.
     # See Log fold-change calculation methods in https://www.biorxiv.org/content/10.1101/2022.05.09.490241v2.full.pdf
