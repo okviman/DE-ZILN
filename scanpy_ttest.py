@@ -7,7 +7,7 @@ from utils import get_DELN_lfcs
 import matplotlib.pyplot as plt
 
 
-def scanpy_sig_test(X, Y, method='t-test', normalization='CP10K'):
+def scanpy_sig_test(X, Y, method='t-test', normalization='CP10K', corr_method="bonferroni"):
     nx = X.shape[0]
     ny = Y.shape[0]
     n_genes = Y.shape[1]
@@ -44,7 +44,7 @@ def scanpy_sig_test(X, Y, method='t-test', normalization='CP10K'):
     sc.pp.log1p(adata)
 
     # Run Differential Expression Analysis using Scanpy's t-test
-    corr_method = "bonferroni"  # use Bonferroni to match output of Seurat
+    #corr_method = "bonferroni"  # use Bonferroni to match output of Seurat
     sc.tl.rank_genes_groups(adata, groupby="group", method=method, reference="X", corr_method=corr_method)
 
     # Extract DE Results
