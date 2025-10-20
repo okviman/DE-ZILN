@@ -1,3 +1,4 @@
+import os
 import anndata as ann
 import pandas as pd
 import numpy as np
@@ -25,7 +26,8 @@ def plot(ax, true_lfc, est_lfc, title, xlims, ylims, ylabel=False):
 
 
 # Load the base data
-memory_CD4 = ann.read_h5ad("simul/10X_PBMC_10K/memory_CD4.h5ad")
+memory_CD4 = ann.read_h5ad("R/10X_PBMC_10K/memory_CD4.h5ad")
+os.makedirs("R/10X_PBMC_10K/figures/", exist_ok=True)
 
 np.random.seed(1)
 replicates = 100
@@ -139,7 +141,7 @@ for i in tqdm(range(replicates), desc="Running replicates"):
     xlims = [np.min(de_results["true_lfc"]) - 0.2, np.max(de_results["true_lfc"]) + 0.2]
     plot(ax1, de_results['true_lfc'], de_results['ln_lfc'], "LN vs. True LFC", xlims, ylims, ylabel=True)
     plot(ax2, de_results['true_lfc'], de_results['scanpy_lfc'], "Scanpy vs. True LFC", xlims, ylims, ylabel=False)
-    fig.savefig(f"results/figures/lfc_{i}.png")
+    fig.savefig(f"R/10X_PBMC_10K/figures/lfc_{i}.png")
     plt.close(fig)
 
 print("...Simulation finished.")
@@ -150,7 +152,7 @@ print(f"Wilcoxon MSE:    {np.mean(mse_scanpy_list):.4f} +/- {np.std(mse_scanpy_l
 
 # Combine all results into one big DataFrame
 all_results_df = pd.concat(all_results_list)
-all_results_df.to_csv("results/CITE_seq_results.csv")
+all_results_df.to_csv("R/10X_PBMC_10K/CITE_seq_results.csv")
 
 all_metrics_df = pd.concat(metrics_list)
-all_metrics_df.to_csv("results/CITE_seq_metrics.csv")
+all_metrics_df.to_csv("R/10X_PBMC_10K/CITE_seq_metrics.csv")
