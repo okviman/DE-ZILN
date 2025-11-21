@@ -45,6 +45,10 @@ for i in tqdm(range(replicates), desc="Running replicates"):
     # Create a copy to prevent data contamination
     adata_rep = memory_CD4.copy()
 
+    # Remove MT genes.
+    mt_gene_mask = adata_rep.var_names.str.startswith('MT-')
+    adata_rep = adata_rep[:, ~mt_gene_mask].copy()
+
     # 1. Assign random groups
     group_assignments = np.random.choice(['group_A', 'group_B'], size=adata_rep.n_obs)
     adata_rep.obs['group'] = pd.Categorical(group_assignments) 
@@ -143,6 +147,14 @@ for i in tqdm(range(replicates), desc="Running replicates"):
     plot(ax2, de_results['true_lfc'], de_results['scanpy_lfc'], "Scanpy vs. True LFC", xlims, ylims, ylabel=False)
     fig.savefig(f"R/10X_PBMC_10K/figures/lfc_{i}.png")
     plt.close(fig)
+
+    # 9. Save the data so that we can run using Seurat in R.
+    rep_path = f"R/10X_PBMC_10K/replicates/rep{i}/"
+    os.makedirs(rep_path, exist_ok=True)
+    np.savetxt(f"{rep_path}/gene_names.csv", filtered_gene_names, delimiter=",", fmt="%s")
+    np.savetxt(f"{rep_path}/true_lfcs.csv", true_lfcs_filtered, delimiter=",")
+    np.savetxt(f"{rep_path}/X.csv", X_data_filtered, delimiter=",", fmt="%i")
+    np.savetxt(f"{rep_path}/Y.csv", Y_data_filtered, delimiter=",", fmt="%i")
 
 print("...Simulation finished.")
 
