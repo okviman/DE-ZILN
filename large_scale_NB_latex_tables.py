@@ -1,19 +1,19 @@
 import pandas as pd
 import matplotlib.pyplot as plt
 
-df1 = pd.read_csv("./simul/test/NB_test_results/nde_mu100_be/d1_vs_d2_01_nde_mu_100.csv")
-df2 = pd.read_csv("./simul/test/NB_test_results/nde_mu100_be/results.csv")
+df = pd.read_csv("./simul/test/NB_test_results/nde_mu10_be/d1_vs_d2_01_nde_mu_10.csv")
+# df2 = pd.read_csv("./simul/test/NB_test_results/nde_mu100_be/results.csv")
 
-df1.drop(columns=['recall'], inplace=True)
+df.drop(columns=['recall'], inplace=True)
 
-df2.rename(columns={'acc': 'accuracy', 'prec': 'precision'}, inplace=True)
-df2['method'] = df2['method'].apply(lambda x: 'Seurat ' + x)
+#df2.rename(columns={'acc': 'accuracy', 'prec': 'precision'}, inplace=True)
+#df2['method'] = df2['method'].apply(lambda x: 'Seurat ' + x)
 
-df = pd.concat([df1, df2], ignore_index=True)
+# df = pd.concat([df1, df2], ignore_index=True)
 df['method'] = df['method'].apply(lambda x: x.replace('_', ' '))
-df['method'] = df['method'].apply(lambda x: x.replace('Seurat t', 'Seurat t-test'))
-df['method'] = df['method'].apply(lambda x: x.replace('DELN', r"\underbar{LN's $t$-test}"))
-df['method'] = df['method'].apply(lambda x: x.replace('Seurat wilcox', 'Seurat wilcoxon'))
+# df['method'] = df['method'].apply(lambda x: x.replace('Seurat t', 'Seurat t-test'))
+df['method'] = df['method'].apply(lambda x: x.replace('LN', r"\underbar{LN's $t$-test}"))
+# df['method'] = df['method'].apply(lambda x: x.replace('Seurat wilcox', 'Seurat wilcoxon'))
 df['method'] = df['method'].apply(lambda x: x.replace('wilcoxon', 'Wilcoxon'))
 df['method'] = df['method'].apply(lambda x: x.replace('t-test', '$t$-test'))
 df['dispersion'] = df['dispersion'].apply(lambda x: str(round(x, 1)))

@@ -1,25 +1,26 @@
 import numpy as np
 import pandas as pd
 import statsmodels.stats.multitest as smm
-from utils import get_DELN_lfcs
+from utils import get_LN_lfcs
 from scanpy_ttest import get_test_results, scanpy_sig_test
 
 
 np.random.seed(0)
 
-nx = 1000
-ny = 1000
+nx = 10000
+ny = 10000
 n_genes = 1500
 columns = ["method", "accuracy", "precision", "recall", "tpr", "tnr", "fpr", "fnr", "f1", "dispersion", "rep_no"]
+methods = ["LN", "t-test", 'wilcoxon']
 
 # Create an empty DataFrame with these columns
 df = pd.DataFrame(columns=columns)
 
 # dispersions
-d2 = .1
-non_de_mu = 100
+d2 = 1.
+non_de_mu = 10
 log_batch_factor = 1.
-for d1 in [0.1, 0.2, 1.]:
+for d1 in [1., 1.5, 2.]:
     # with probability 0.1, there is Gaussian noise added to a gene in group 1
     rep_count = 20
     for rep in range(rep_count):
@@ -43,10 +44,10 @@ for d1 in [0.1, 0.2, 1.]:
         X = np.random.negative_binomial(n=r1, p=p1, size=(nx, n_genes))
         Y = np.random.negative_binomial(n=r2, p=p2, size=(ny, n_genes))
 
-        for method in ["DELN", "t-test", 't-test_overestim_var', 'wilcoxon']:
-            if method == "DELN":
-                _, DELN_p_vals = get_DELN_lfcs(Y, X, test='t')
-                adj_pvals = smm.multipletests(DELN_p_vals, alpha=0.05, method='bonferroni')[1]
+        for method in methods:
+            if method == "LN":
+                _, LN_p_vals = get_LN_lfcs(Y, X, test='t')
+                adj_pvals = smm.multipletests(LN_p_vals, alpha=0.05, method='bonferroni')[1]
             else:
                 _, adj_pvals = scanpy_sig_test(X, Y, method=method)
                 method = "Scanpy " + method
