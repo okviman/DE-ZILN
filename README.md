@@ -2,6 +2,7 @@
 Differential expression analysis with LN's $t$-test
 
 # Small test
+RECOMB requests a small test for the reviewers. To this end, we included small_test.py in our repo. It reproduces a single run of the averaged results in Table 2 in the submission. To this end, please keep in mind that the results are not expected to exactly reproduce the results in our submission. To reproduce the table, instead follow the intructions below.
 
 # Reproducing RECOMB submission results
 
