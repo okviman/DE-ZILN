@@ -11,6 +11,20 @@ To reproduce Fig. 1, run variance_vs_metric.py.
 
 To reproduce the Table 2, first run large_scale_NB_DE_test.py (the NB parameters need to be adjusted according to the text in the submission in order to reproduce Table 1), and then run large_scale_NB_latex_tables.py with the correct path to the results generated via execution of the former script.
 
+## CITE-seq experiments
+
+- The raw expression data was downloaded from 10x https://cf.10xgenomics.com/samples/cell-vdj/5.0.0/sc5p_v2_hs_PBMC_10k/sc5p_v2_hs_PBMC_10k_filtered_feature_bc_matrix.h5.
+- Data processing code is found in `R/`.
+    + `pbmc10k_process.R`: loads the raw data; use ADT markers to identify memory CD4++ T cells. Saves the data to `10X_PBMC_10K/pbmc10k_cd4_memory.rds` (also saves all of the expression data to `10X_PBMC_10K/pbmc10k.rds` for further experimentation).
+    + `pbmc10k_to_h5ad.R`: filters row expression genes and converts `10X_PBMC_10K/pbmc10k_cd4_memory.rds` to `10X_PBMC_10K/memory_CD4.h5ad` for interoperatability with `scanpy`.
+- Code to run the experiments to comapre LN's test to `scanpy` is found in `large_scale_CITE_seq_exp.py`.
+    + Loads `10X_PBMC_10K/memory_CD4.h5ad`
+    + Performs permutation to generate 100 replicates of the data.
+    + For each replicate, randomly selects 100 genes along with random LFC values; perturbs the counts.
+- Code to process the results are also found in `R/`.
+    + `pbmc10k_seurat.R`: generates Seurat LFC estimates. **The result from this analysis was not included in the paper because it did not affect the conclusion.**
+    + `pbmc10k_metrics.R`: processes the LFC and the test results and generates figures and tables.
+- Figures and result files are added to `10X_PBMC_10K/`.
 
 ## Visium HD tests
     - Glomerular capsules in the  kidney sample
