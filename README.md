@@ -1,8 +1,17 @@
 # LN's $t$-test
 Differential expression analysis with LN's $t$-test
 
+# Small test
 
-# Visium HD tests
+# Reproducing RECOMB submission results
+
+### Section 4.1
+To reproduce Fig. 1, run variance_vs_metric.py.
+
+To reproduce the Table 2, first run large_scale_NB_DE_test.py (the NB parameters need to be adjusted according to the text in the submission in order to reproduce Table 1), and then run large_scale_NB_latex_tables.py with the correct path to the results generated via execution of the former script.
+
+
+## Visium HD tests
     - Glomerular capsules in the  kidney sample
     The files are in notebooks/test folder
         - preprocess_VisumHD_Kidney.ipynb is the preprocessing step that creates two h5ad files
