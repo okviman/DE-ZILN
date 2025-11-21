@@ -1,2 +1,2 @@
-# DE-ZILN
-Differential expression analysis with ZILN
+# LN's $t$-test
+Differential expression analysis with LN's $t$-test
