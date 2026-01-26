@@ -1,0 +1,52 @@
+# Configuration file for scrnaseq_resolutions_analysis.py
+# 
+# This file specifies:
+# - Path to the AnnData file (.h5ad format)
+# - Leiden resolutions to test (list of [resolution_value, key_name] pairs)
+# - Number of top genes to use for signature analysis
+# - Cell type markers dictionary
+
+# Path to the AnnData file
+adata_path: "./data/pbmcs3k_pre.h5ad"
+
+# Leiden resolutions to test
+# Format: list of [resolution_value, key_name] pairs
+# Each resolution will create a clustering with the specified key name
+leiden_resolutions:
+  - [0.01, "leiden_verylow"]
+  - [0.1, "leiden_low"]
+  - [1.0, "leiden_mid"]
+  - [2.0, "leiden_high"]
+  - [3.0, "leiden_veryhigh"]
+
+# Number of top genes to use for signature analysis
+top_genes: 20
+
+# Cell type markers
+# Dictionary mapping cell type names to lists of marker genes
+# Reference: https://link.springer.com/article/10.1186/s13059-024-03183-0#MOESM1
+markers:
+  "Naive CD4 T":
+    - "IL7R"
+    - "CCR7"
+  "CD14 Mono":
+    - "CD14"
+    - "LYZ"
+  "Memory CD4 T":
+    - "IL7R"
+    - "S100A4"
+  "B":
+    - "MS4A1"
+  "CD8 T":
+    - "CD8A"
+  "FCGR3A Mono":
+    - "FCGR3A"
+    - "MS4A7"
+  "NK":
+    - "GNLY"
+    - "NKG7"
+  "DC":
+    - "FCER1A"
+    - "CST3"
+  "Platelet":
+    - "PPBP"
