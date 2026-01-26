@@ -172,6 +172,227 @@ def get_LN_lfcs(Y_, X_, normalize=True, test='t', normalization='CP10K', return_
 
     return lfc, p_vals
 
+import numpy as np
+
+try:
+    import scipy.sparse as sp
+except ImportError:
+    sp = None
+
+
+def _ensure_sparse_positive(A):
+    """
+    Return CSR sparse matrix containing only strictly positive entries.
+    (Mimics your `A[A <= 0] = np.nan` logic by *dropping* non-positives.)
+    """
+    if sp is None:
+        raise ImportError("scipy.sparse is required for the sparse implementation.")
+
+    if not sp.issparse(A):
+        # If you ever pass dense here, this converts to sparse (can be expensive).
+        A = np.asarray(A, dtype=np.float64)
+        A[A <= 0] = 0.0
+        A = sp.csr_matrix(A, dtype=np.float64)
+        A.eliminate_zeros()
+        return A
+
+    A = A.tocsr().astype(np.float64, copy=True)
+    if A.nnz:
+        bad = A.data <= 0
+        if np.any(bad):
+            A.data[bad] = 0.0
+            A.eliminate_zeros()
+    return A
+
+
+def _cp10k_sparse(A_csr):
+    """Row-normalize sparse matrix to counts-per-10k. Preserves sparsity."""
+    rs = np.asarray(A_csr.sum(axis=1)).ravel().astype(np.float64)
+    scale = np.zeros_like(rs)
+    nz = rs > 0
+    scale[nz] = 1e4 / rs[nz]
+    return sp.diags(scale).dot(A_csr)
+
+
+def _geom_mean_nonzero_per_gene(A_csc):
+    """Geometric mean per gene over nonzero entries only (vectorized via CSC indptr)."""
+    G = A_csc.shape[1]
+    indptr = A_csc.indptr
+    counts = np.diff(indptr).astype(np.float64)
+
+    denom = np.ones(G, dtype=np.float64)
+    if A_csc.nnz == 0:
+        return denom
+
+    data = A_csc.data
+    logdata = np.log(data)
+
+    # sum of logs per column using reduceat
+    sumlog = np.add.reduceat(logdata, indptr[:-1])
+    mask = counts > 0
+    denom[mask] = np.exp(sumlog[mask] / counts[mask])
+    denom[~mask] = 1.0
+    denom[~np.isfinite(denom)] = 1.0
+    denom[denom == 0] = 1.0
+    return denom
+
+
+def _median_of_ratios_sparse(A_csr):
+    """
+    DESeq2 median-of-ratios, ignoring zeros.
+    This is the only part that uses a per-row loop (still O(nnz)).
+    """
+    A_csc = A_csr.tocsc()
+    denom = _geom_mean_nonzero_per_gene(A_csc)
+
+    indptr = A_csr.indptr
+    indices = A_csr.indices
+    data = A_csr.data
+
+    n = A_csr.shape[0]
+    c = np.ones(n, dtype=np.float64)
+
+    for i in range(n):
+        s, e = indptr[i], indptr[i + 1]
+        if s == e:
+            c[i] = 1.0
+            continue
+        ratios = data[s:e] / denom[indices[s:e]]
+        # guard against weird denom / inf
+        ratios = ratios[np.isfinite(ratios) & (ratios > 0)]
+        c[i] = np.median(ratios) if ratios.size else 1.0
+
+    # divide each row by its size factor
+    inv = np.ones_like(c)
+    ok = c > 0
+    inv[ok] = 1.0 / c[ok]
+    return sp.diags(inv).dot(A_csr)
+
+
+def _pos_mean_var_nnz_per_gene(A):
+    """
+    For strictly-positive sparse A (cells x genes), compute:
+    n_plus[g]  = #positive entries (nnz per column)
+    mean[g]    = mean of positive entries
+    var[g]     = population variance of positive entries (ddof=0) to match np.nanvar default
+    """
+    A_csc = A.tocsc()
+    n_plus = np.diff(A_csc.indptr).astype(np.float64)  # faster than getnnz(axis=0)
+    s = np.asarray(A_csc.sum(axis=0)).ravel().astype(np.float64)
+    ss = np.asarray(A_csc.multiply(A_csc).sum(axis=0)).ravel().astype(np.float64)
+
+    mean = np.ones(A_csc.shape[1], dtype=np.float64)  # keep your "ones to avoid NaNs"
+    var = np.zeros(A_csc.shape[1], dtype=np.float64)
+
+    mask = n_plus > 0
+    mean[mask] = s[mask] / n_plus[mask]
+    # population var (ddof=0): E[x^2] - (E[x])^2
+    ex2 = np.zeros_like(var)
+    ex2[mask] = ss[mask] / n_plus[mask]
+    var[mask] = ex2[mask] - mean[mask] ** 2
+    var[var < 0] = 0.0  # numerical guard
+
+    all_zeros = ~mask
+    return n_plus, mean, var, all_zeros
+
+
+def get_LN_lfcs_sparse(
+    Y_,
+    X_,
+    normalize=True,
+    test="t",
+    normalization="CP10K",
+    return_standard_error=False,
+    return_statistic=False,
+    eps=1e-12,
+):
+    """
+    Sparse-friendly version of your LN LFC + test.
+
+    Expects Y_, X_ to be scipy sparse (CSR/CSC) matrices (cells x genes).
+    It treats *zeros and non-positives as absent* (like your NaN masking),
+    and computes moments over strictly-positive entries only.
+    """
+    if sp is None:
+        raise ImportError("scipy.sparse is required for sparse Y_/X_.")
+
+    Y = _ensure_sparse_positive(Y_)
+    X = _ensure_sparse_positive(X_)
+
+    n = Y.shape[0]
+    n_prime = X.shape[0]
+    G = Y.shape[1]
+    if X.shape[1] != G:
+        raise ValueError("Y_ and X_ must have the same number of genes (columns).")
+
+    # Normalization (keeps sparsity)
+    if normalize and (normalization == "CP10K"):
+        Y = _cp10k_sparse(Y)
+        X = _cp10k_sparse(X)
+    elif normalize and (normalization == "median-of-ratios"):
+        # Works, but slower than CP10K due to per-row medians.
+        Y = _median_of_ratios_sparse(Y)
+        X = _median_of_ratios_sparse(X)
+
+    # Positive-entry moments per gene
+    n_plus, pos_mean_Y, var_Y, all_zeros_Y = _pos_mean_var_nnz_per_gene(Y)
+    n_plus_prime, pos_mean_X, var_X, all_zeros_X = _pos_mean_var_nnz_per_gene(X)
+
+    # \hat{a} (your fallback-to-ones behavior)
+    a_hat_Y = np.ones(G, dtype=np.float64)
+    a_hat_Y[~all_zeros_Y] = n_plus[~all_zeros_Y]
+    a_hat_X = np.ones(G, dtype=np.float64)
+    a_hat_X[~all_zeros_X] = n_plus_prime[~all_zeros_X]
+
+    # log2 theta hats
+    log2_theta_hat_Y = np.log2(a_hat_Y / float(n))
+    log2_theta_hat_X = np.log2(a_hat_X / float(n_prime))
+
+    # sample mean of positive counts
+    # (pos_mean_* already has 1.0 for all-zeros genes, matching your behavior)
+    log2_m_Y = np.log2(np.maximum(pos_mean_Y, eps))
+    log2_m_X = np.log2(np.maximum(pos_mean_X, eps))
+
+    lfc = (log2_theta_hat_Y + log2_m_Y) - (log2_theta_hat_X + log2_m_X)
+
+    # Standard errors
+    # NOTE: uses your trigamma + log(1 + var/(n_plus*mean^2)) structure.
+    # Assumes trigamma is defined in your module (e.g. from scipy.special import polygamma; trigamma = lambda x: polygamma(1, x))
+    se_Y_1 = trigamma(a_hat_Y) - trigamma(float(n))
+    se_X_1 = trigamma(a_hat_X) - trigamma(float(n_prime))
+
+    se_Y_2 = np.ones(G, dtype=np.float64)
+    se_X_2 = np.ones(G, dtype=np.float64)
+
+    mY2 = np.maximum(pos_mean_Y, eps) ** 2
+    mX2 = np.maximum(pos_mean_X, eps) ** 2
+
+    maskY = ~all_zeros_Y
+    maskX = ~all_zeros_X
+
+    se_Y_2[maskY] = np.log(1.0 + var_Y[maskY] / (np.maximum(n_plus[maskY], 1.0) * mY2[maskY]))
+    se_X_2[maskX] = np.log(1.0 + var_X[maskX] / (np.maximum(n_plus_prime[maskX], 1.0) * mX2[maskX]))
+
+    se_Y = np.sqrt(np.maximum(se_Y_1 + se_Y_2, 0.0)) / np.log(2.0)
+    se_X = np.sqrt(np.maximum(se_X_1 + se_X_2, 0.0)) / np.log(2.0)
+
+    mu_Y = log2_theta_hat_Y + log2_m_Y
+    mu_X = log2_theta_hat_X + log2_m_X
+
+    if test == "t":
+        statistic, p_vals = get_t_statistic(mu_Y, mu_X, se_Y, se_X, n, n_prime)
+    else:
+        statistic, p_vals = compute_p_vals(mu_Y, mu_X, se_Y, se_X)
+
+    if return_standard_error:
+        return lfc, p_vals, np.sqrt(se_X**2 + se_Y**2)
+
+    if return_statistic:
+        return lfc, p_vals, statistic
+
+    return lfc, p_vals
+
+
 
 def get_seurat_lfcs(X, Y, normalize=True):
     # Manual calculation of the LFC based on how seurat implements it.

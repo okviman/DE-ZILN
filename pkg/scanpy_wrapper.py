@@ -6,7 +6,7 @@ import scipy.sparse as sp
 
 # Handle imports when loaded directly via importlib or as a package
 try:
-    from .ln_test import get_LN_lfcs
+    from .ln_test import get_LN_lfcs, get_LN_lfcs_sparse
 except ImportError:
     # Fallback for when loaded directly via importlib
     import importlib.util
@@ -17,6 +17,7 @@ except ImportError:
     ln_test = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(ln_test)
     get_LN_lfcs = ln_test.get_LN_lfcs
+    get_LN_lfcs_sparse = ln_test.get_LN_lfcs_sparse
 
 
 def _to_dense(a):
@@ -38,6 +39,7 @@ def rank_genes_groups_ln(
     key_added: str = "rank_genes_groups",
     test: str = "t",  # forwarded to get_LN_lfcs
     rankby_abs: bool = False,
+    sparse: bool = False,
 ):
     """
     Takes normalized data and performs LN's t-test. Updates the adata object with the results.
@@ -97,7 +99,7 @@ def rank_genes_groups_ln(
     # Main loop
     obs_vals = adata.obs[groupby].values
     for g in use_groups:
-        print(f"Processing group: {g}")
+
         idx_g = obs_vals == g
         if reference == "rest":
             idx_r = ~idx_g
@@ -109,16 +111,25 @@ def rank_genes_groups_ln(
         if idx_r.sum() == 0:
             raise ValueError(f"Reference for group '{g}' has 0 cells (reference='{reference}').")
 
-        Y_ = _to_dense(Xmat[idx_g, :])
-        X_ = _to_dense(Xmat[idx_r, :])
-
-        lfc_vec, p_vec, statistic_vec = get_LN_lfcs(
+        Y_ = Xmat[idx_g, :]
+        X_ = Xmat[idx_r, :]
+        if sparse:
+            lfc_vec, p_vec, statistic_vec = get_LN_lfcs_sparse(
+                Y_,
+                X_,
+                test=test,
+                return_statistic=True,
+            )
+        else:
+            # This is slow: 0.1 seconds
+            Y_ = _to_dense(Y_)
+            X_ = _to_dense(X_)
+            lfc_vec, p_vec, statistic_vec = get_LN_lfcs(
             Y_,
             X_,
             test=test,
             return_statistic=True,
         )
-
         lfc_vec = np.asarray(lfc_vec, dtype=float)
         p_vec = np.asarray(p_vec, dtype=float)
         statistic_vec = np.asarray(statistic_vec, dtype=float)
