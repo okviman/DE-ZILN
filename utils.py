@@ -131,7 +131,7 @@ def get_ZILN_lfcs(X, Y, eps=0., return_p_vals=False):
     return estimated_lfcs
 
 
-def get_DELN_lfcs(Y_, X_, normalize=True, test='t', normalization='CP10K', return_standard_error=False):
+def get_DELN_lfcs(Y_, X_, normalize=True, test='t', normalization='CP10K', return_standard_error=False, return_log_abs_statistic=False):
     # Y is (n_cells, n_genes)
     eps = 1e-9
 
@@ -188,19 +188,43 @@ def get_DELN_lfcs(Y_, X_, normalize=True, test='t', normalization='CP10K', retur
     se_X_2 = np.log(1 + np.nanvar(X, axis=0) / (n_plus_prime * (2 ** log2_m_X) ** 2))
     se_X = np.sqrt(se_X_1 + se_X_2) / np.log(2)
 
-    if test == 't':
-        statistic, p_vals = get_t_statistic(log2_theta_hat_Y + log2_m_Y, log2_theta_hat_X + log2_m_X,
-                                            se_Y, se_X, n, n_prime)
+    if return_log_abs_statistic:
+        # Return test statistics, log(|statistic|), AND p-values
+        if test == 't':
+            statistic, log_abs_statistic = get_t_statistic(log2_theta_hat_Y + log2_m_Y, log2_theta_hat_X + log2_m_X,
+                                                            se_Y, se_X, n, n_prime, return_log_abs_statistic=True)
+            # Also compute p-values from the test statistic
+            nu1, nu2 = n - 1, n_prime - 1
+            se_combined_sq = se_Y ** 2 + se_X ** 2
+            df = se_combined_sq ** 2 / (se_Y ** 4 / nu1 + se_X ** 4 / nu2)
+            t_dist = t(df)
+            p_vals = 2 * t_dist.sf(np.abs(statistic))
+        else:
+            # z-test
+            statistic, log_abs_statistic = compute_p_vals(log2_theta_hat_Y + log2_m_Y, log2_theta_hat_X + log2_m_X, 
+                                                          se_Y, se_X, return_log_abs_statistic=True)
+            # Also compute p-values from the test statistic
+            p_vals = 2 * (1 - stats.norm.cdf(np.abs(statistic)))
+        
+        if return_standard_error:
+            return lfc, statistic, log_abs_statistic, p_vals, np.sqrt(se_X ** 2 + se_Y ** 2)
+        return lfc, statistic, log_abs_statistic, p_vals
     else:
-        # z-test
-        statistic, p_vals = compute_p_vals(log2_theta_hat_Y + log2_m_Y, log2_theta_hat_X + log2_m_X, se_Y, se_X)
+        # Return p-values (original behavior)
+        if test == 't':
+            statistic, p_vals = get_t_statistic(log2_theta_hat_Y + log2_m_Y, log2_theta_hat_X + log2_m_X,
+                                                se_Y, se_X, n, n_prime, return_log_abs_statistic=False)
+        else:
+            # z-test
+            statistic, p_vals = compute_p_vals(log2_theta_hat_Y + log2_m_Y, log2_theta_hat_X + log2_m_X, 
+                                               se_Y, se_X, return_log_abs_statistic=False)
+        
+        if return_standard_error:
+            return lfc, p_vals, np.sqrt(se_X ** 2 + se_Y ** 2)
+        return lfc, p_vals
 
-    if return_standard_error:
-        return lfc, p_vals, np.sqrt(se_X ** 2 + se_Y ** 2)
-    return lfc, p_vals
 
-
-def get_LN_lfcs(Y_, X_, normalize=True, test='t', normalization='CP10K', return_standard_error=False):
+def get_LN_lfcs(Y_, X_, normalize=True, test='t', normalization='CP10K', return_standard_error=False, return_log_abs_statistic=False):
     # Y is (n_cells, n_genes)
 
     G = Y_.shape[1]
@@ -266,16 +290,40 @@ def get_LN_lfcs(Y_, X_, normalize=True, test='t', normalization='CP10K', return_
     se_X_2[~all_zeros_X] = np.log(1 + np.nanvar(X[:, ~all_zeros_X], axis=0) / (n_plus_prime[~all_zeros_X] * (2 ** log2_m_X[~all_zeros_X]) ** 2))
     se_X = np.sqrt(se_X_1 + se_X_2) / np.log(2)
 
-    if test == 't':
-        statistic, p_vals = get_t_statistic(log2_theta_hat_Y + log2_m_Y, log2_theta_hat_X + log2_m_X,
-                                            se_Y, se_X, n, n_prime)
+    if return_log_abs_statistic:
+        # Return test statistics, log(|statistic|), AND p-values
+        if test == 't':
+            statistic, log_abs_statistic = get_t_statistic(log2_theta_hat_Y + log2_m_Y, log2_theta_hat_X + log2_m_X,
+                                                            se_Y, se_X, n, n_prime, return_log_abs_statistic=True)
+            # Also compute p-values from the test statistic
+            nu1, nu2 = n - 1, n_prime - 1
+            se_combined_sq = se_Y ** 2 + se_X ** 2
+            df = se_combined_sq ** 2 / (se_Y ** 4 / nu1 + se_X ** 4 / nu2)
+            t_dist = t(df)
+            p_vals = 2 * t_dist.sf(np.abs(statistic))
+        else:
+            # z-test
+            statistic, log_abs_statistic = compute_p_vals(log2_theta_hat_Y + log2_m_Y, log2_theta_hat_X + log2_m_X, 
+                                                          se_Y, se_X, return_log_abs_statistic=True)
+            # Also compute p-values from the test statistic
+            p_vals = 2 * (1 - stats.norm.cdf(np.abs(statistic)))
+        
+        if return_standard_error:
+            return lfc, statistic, log_abs_statistic, p_vals, np.sqrt(se_X ** 2 + se_Y ** 2)
+        return lfc, statistic, log_abs_statistic, p_vals
     else:
-        # z-test
-        statistic, p_vals = compute_p_vals(log2_theta_hat_Y + log2_m_Y, log2_theta_hat_X + log2_m_X, se_Y, se_X)
-
-    if return_standard_error:
-        return lfc, p_vals, np.sqrt(se_X ** 2 + se_Y ** 2)
-    return lfc, p_vals
+        # Return p-values (original behavior)
+        if test == 't':
+            statistic, p_vals = get_t_statistic(log2_theta_hat_Y + log2_m_Y, log2_theta_hat_X + log2_m_X,
+                                                se_Y, se_X, n, n_prime, return_log_abs_statistic=False)
+        else:
+            # z-test
+            statistic, p_vals = compute_p_vals(log2_theta_hat_Y + log2_m_Y, log2_theta_hat_X + log2_m_X, 
+                                               se_Y, se_X, return_log_abs_statistic=False)
+        
+        if return_standard_error:
+            return lfc, p_vals, np.sqrt(se_X ** 2 + se_Y ** 2)
+        return lfc, p_vals
 
 
 def get_seurat_lfcs(X, Y, normalize=True):
@@ -325,23 +373,42 @@ def transform(z):
     return np.log((z * 1e4 / z.sum(1, keepdims=True)) + 1)
 
 
-def compute_p_vals(mean1, mean2, se1, se2):
+def compute_p_vals(mean1, mean2, se1, se2, return_log_abs_statistic=False):
     # Compute the test statistic
-    z_stat = (mean1 - mean2) / ((se1 ** 2 + se2 ** 2) ** 0.5)
+    d = mean1 - mean2
+    se_combined_sq = se1 ** 2 + se2 ** 2
+    z_stat = d / (se_combined_sq ** 0.5)
 
-    # Compute the p-value for the two-tailed test
-    p_value = 2 * (1 - stats.norm.cdf(abs(z_stat)))
+    if return_log_abs_statistic:
+        # Compute log(|z_stat|) using log-space arithmetic for numerical stability
+        # log(|z_stat|) = log(|d|) - 0.5 * log(se_combined_sq)
+        log_abs_d = np.log(np.abs(d) + np.finfo(float).tiny)  # Add tiny to avoid log(0)
+        log_se_combined_sq = np.log(se_combined_sq + np.finfo(float).tiny)
+        log_abs_z_stat = log_abs_d - 0.5 * log_se_combined_sq
+        return z_stat, log_abs_z_stat
+    else:
+        # Compute the p-value for the two-tailed test
+        p_value = 2 * (1 - stats.norm.cdf(abs(z_stat)))
+        return z_stat, p_value
 
-    return z_stat, p_value
-
-def get_t_statistic(mean1, mean2, se1, se2, n1, n2):
+def get_t_statistic(mean1, mean2, se1, se2, n1, n2, return_log_abs_statistic=False):
     # implements two-sided t-test
     nu1, nu2 = n1 - 1, n2 - 1
-    df = (se1 ** 2 + se2 ** 2) ** 2 / (se1 ** 4 / nu1 + se2 ** 4 / nu2)
+    se_combined_sq = se1 ** 2 + se2 ** 2
+    df = se_combined_sq ** 2 / (se1 ** 4 / nu1 + se2 ** 4 / nu2)
     d = mean1 - mean2
-    denom = ((se1 ** 2 + se2 ** 2) ** 0.5)
+    denom = (se_combined_sq ** 0.5)
     t_statistic = d / denom
     t_dist = t(df)
-    p_value = 2 * t_dist.sf(np.abs(t_statistic))
-    return t_statistic, p_value
+    
+    if return_log_abs_statistic:
+        # Compute log(|t_statistic|) using log-space arithmetic for numerical stability
+        # log(|t_statistic|) = log(|d|) - 0.5 * log(se_combined_sq)
+        log_abs_d = np.log(np.abs(d) + np.finfo(float).tiny)  # Add tiny to avoid log(0)
+        log_se_combined_sq = np.log(se_combined_sq + np.finfo(float).tiny)
+        log_abs_t_stat = log_abs_d - 0.5 * log_se_combined_sq
+        return t_statistic, log_abs_t_stat
+    else:
+        p_value = 2 * t_dist.sf(np.abs(t_statistic))
+        return t_statistic, p_value
 
