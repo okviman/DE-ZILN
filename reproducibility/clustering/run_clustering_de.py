@@ -109,11 +109,10 @@ def run_mast_de(
 
     # Transfer expression matrix to R (genes x cells, Fortran order for R)
     X_T = np.asfortranarray(X.T)  # genes x cells in column-major for R
-    with localconverter(ro.default_converter + numpy2ri.converter):
-        r_expr = ro.r.matrix(
-            ro.FloatVector(X_T.ravel(order='F')),
-            nrow=n_genes, ncol=n_cells, byrow=False
-        )
+    r_expr = ro.r.matrix(
+        ro.FloatVector(X_T.ravel(order='F')),
+        nrow=n_genes, ncol=n_cells, byrow=False
+    )
     r_expr.rownames = ro.StrVector(gene_names)
     r_expr.colnames = ro.StrVector(cell_names)
     ro.globalenv['expr_mat'] = r_expr
