@@ -17,8 +17,6 @@ import yaml
 import numpy as np
 import pandas as pd
 import scanpy as sc
-import matplotlib.pyplot as plt
-import seaborn as sns
 
 def load_config(config_path):
     """Load configuration from YAML file."""
@@ -63,7 +61,7 @@ def main():
     )
     parser.add_argument(
         '--skip-plots', action='store_true',
-        help='Skip generating plots (only compute metrics as CSV)'
+        help='(Ignored: plotting is always skipped in this version)'
     )
 
     args = parser.parse_args()
@@ -231,120 +229,6 @@ def main():
         os.path.join(args.output_dir, f'n_sig_genes_by_resolution.csv'),
         index=False
     )
-
-    # ------ Plotting (optional) ------
-    if not args.skip_plots:
-        # Simple visualizations and Jaccard heatmaps
-        try:
-            sns.set(style="whitegrid")
-
-            # Plot avg_jaccard_by_resolution (top N)
-            plt.figure(figsize=(10,6))
-            sns.boxplot(
-                data=df_jaccard,
-                x="resolution", y="avg_jaccard_sig", hue="method", showfliers=False, gap=0.1,
-            )
-            sns.stripplot(
-                data=df_jaccard,
-                x="resolution", y="avg_jaccard_sig", hue="method", dodge=True, alpha=0.6, color='k', zorder=10, size=4,
-            )
-            handles, labels = plt.gca().get_legend_handles_labels()
-            n_methods = len(df_jaccard["method"].unique())
-            plt.legend(handles[:n_methods], labels[:n_methods], title="Method", loc="upper right")
-            plt.ylabel("Average Jaccard index of cluster signatures to each cell type")
-            plt.xlabel("Clustering resolution")
-            plt.title(f"Avg Jaccard (top {top_genes} sig genes)")
-            plt.grid(True, axis="y", alpha=0.3)
-            plt.tight_layout()
-            plt.savefig(os.path.join(args.output_dir, 'avg_jaccard_by_resolution.png'), dpi=300, bbox_inches='tight')
-            plt.close()
-
-            # Plot avg_jaccard_by_resolution_all_genes
-            plt.figure(figsize=(10,6))
-            sns.boxplot(
-                data=df_jaccard_all,
-                x="resolution", y="avg_jaccard_sig", hue="method", showfliers=False, gap=0.1,
-            )
-            sns.stripplot(
-                data=df_jaccard_all,
-                x="resolution", y="avg_jaccard_sig", hue="method", dodge=True, alpha=0.6, color='k', zorder=10, size=4,
-            )
-            handles, labels = plt.gca().get_legend_handles_labels()
-            n_methods = len(df_jaccard_all["method"].unique())
-            plt.legend(handles[:n_methods], labels[:n_methods], title="Method", loc="upper right")
-            plt.ylabel("Average Jaccard index of cluster signatures to each cell type")
-            plt.xlabel("Clustering resolution")
-            plt.title(f"Avg Jaccard (all significant genes)")
-            plt.grid(True, axis="y", alpha=0.3)
-            plt.tight_layout()
-            plt.savefig(os.path.join(args.output_dir, 'avg_jaccard_by_resolution_all_genes.png'), dpi=300, bbox_inches='tight')
-            plt.close()
-
-            # Plot avg_lfc_by_resolution
-            plt.figure(figsize=(8,5))
-            sns.boxplot(
-                data=df_lfc,
-                x="resolution", y="avg_abs_lfc_sig", hue="method", showfliers=False, gap=0.1,
-            )
-            sns.stripplot(
-                data=df_lfc,
-                x="resolution", y="avg_abs_lfc_sig", hue="method", dodge=True, alpha=0.6, color='k', zorder=10, size=4,
-            )
-            handles, labels = plt.gca().get_legend_handles_labels()
-            n_methods = len(df_lfc["method"].unique())
-            plt.legend(handles[:n_methods], labels[:n_methods], title="Method", loc="upper right")
-            plt.ylabel("Average |LFC| of significant DE genes per cluster (FDR < 0.05)")
-            plt.xlabel("Clustering resolution")
-            plt.title("Average |LFC| of significant DE genes per cluster")
-            plt.grid(True, axis="y", alpha=0.3)
-            plt.tight_layout()
-            plt.savefig(os.path.join(args.output_dir, 'avg_lfc_by_resolution.png'), dpi=300, bbox_inches='tight')
-            plt.close()
-
-            # Plot n_sig_genes_by_resolution
-            plt.figure(figsize=(8,5))
-            sns.boxplot(
-                data=df_nsig,
-                x="resolution", y="n_sig_genes", hue="method", showfliers=False, gap=0.1,
-            )
-            sns.stripplot(
-                data=df_nsig,
-                x="resolution", y="n_sig_genes", hue="method", dodge=True, alpha=0.6, color='k', zorder=10, size=4,
-            )
-            handles, labels = plt.gca().get_legend_handles_labels()
-            n_methods = len(df_nsig["method"].unique())
-            plt.legend(handles[:n_methods], labels[:n_methods], title="Method", loc="upper right")
-            plt.ylabel("Number of significant DE genes per cluster (FDR < 0.05)")
-            plt.xlabel("Clustering resolution")
-            plt.title("Number of significant DE genes per cluster")
-            plt.grid(True, axis="y", alpha=0.3)
-            plt.tight_layout()
-            plt.savefig(os.path.join(args.output_dir, 'n_sig_genes_by_resolution.png'), dpi=300, bbox_inches='tight')
-            plt.close()
-
-            # ---- Plot Jaccard heatmaps (for main DE methods per resolution) ----
-            print("Plotting Jaccard index heatmaps of DE cluster signatures vs cell type marker signatures...")
-            for method in de_methods:
-                for key in resolution_keys:
-                    mat, clusters = jaccard_matrices[method][key]
-                    plt.figure(figsize=(1.5+0.3*len(cell_types), 1.5+0.25*len(clusters)))
-                    ax = sns.heatmap(mat, annot=True, fmt=".2f", 
-                        xticklabels=cell_types, yticklabels=clusters, 
-                        cmap="viridis", vmin=0.0, vmax=1.0, cbar_kws={'label': "Jaccard Index"})
-                    ax.set_xlabel("Cell type marker signature")
-                    ax.set_ylabel(f"{key} cluster")
-                    plt.title(f"Jaccard index: {method_labels[method]} - {key}")
-                    plt.tight_layout()
-                    savepath = os.path.join(
-                        args.output_dir, 
-                        f'jaccard_heatmap_top{top_genes}_{method}_{key}.png'
-                    )
-                    plt.savefig(savepath, dpi=200, bbox_inches='tight')
-                    plt.close()
-
-        except Exception as e:
-            print("Warning: Plotting failed. Reason:", str(e))
-            # This might happen, for instance, if some metrics are all NaN etc.
 
     print(f"\nAnalysis complete! Results saved to {args.output_dir}/")
 
