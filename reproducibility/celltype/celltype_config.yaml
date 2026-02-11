@@ -1,0 +1,4 @@
+adata_path: "./data/pbmcs3k_pre.h5ad"
+
+celltype_column: "cell_type"
+celltype_values: ["Naive CD4 T", "CD14 Mono"]

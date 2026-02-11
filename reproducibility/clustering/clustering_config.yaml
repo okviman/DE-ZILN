@@ -1,13 +1,7 @@
-# Configuration file for scrnaseq_resolutions_analysis.py
-# 
-# This file specifies:
-# - Path to the AnnData file (.h5ad format)
-# - Leiden resolutions to test (list of [resolution_value, key_name] pairs)
-# - Number of top genes to use for signature analysis
-# - Cell type markers dictionary
+# Configuration file for clustering_metrics
 
 # Path to the AnnData file
-adata_path: "./data/pbmcs3k_pre.h5ad"
+adata_path: "../data/pbmcs3k_pre.h5ad"
 
 # Leiden resolutions to test
 # Format: list of [resolution_value, key_name] pairs
