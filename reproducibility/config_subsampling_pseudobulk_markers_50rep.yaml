@@ -1,0 +1,56 @@
+# Config: 50 replicates, markers from pseudo-bulk PyDESeq2 DE (top 20 = Cluster-3, last 20 = Cluster-1).
+# Other options copied from config_subsampling_test_10rep.yaml.
+adata_path: "/home/hosein.toosi/ovary/podocytes/data/vishd-cluster1-cluster3-2um-with-clusters-subsampled.h5ad"
+min_cells_per_gene: 2
+# Cells with fewer than this many 2um spots after subsampling are excluded (default 5)
+min_spots_per_cell: 3
+# Cells with total UMI count below this after subsampling are excluded (default 20)
+min_counts_after_subsampling: 20
+subsampling_fractions: [0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]
+n_replicates: 50
+top_genes: 20
+cluster_column: "Cluster"
+cell_id_column: "cell_id"
+markers:
+  "Cluster-1":
+    - "IL7R"
+    - "CD6"
+    - "B2M"
+    - "NLRC5"
+    - "GIMAP7"
+    - "KLF2"
+    - "TMC8"
+    - "TCF7"
+    - "DGKA"
+    - "IL32"
+    - "TXNIP"
+    - "FXYD5"
+    - "CD44"
+    - "CCL19"
+    - "SELL"
+    - "TMSB10"
+    - "TRBC1"
+    - "TRAC"
+    - "CCL21"
+    - "TRBC2"
+  "Cluster-3":
+    - "CLU"
+    - "IGHG1"
+    - "IGKC"
+    - "H1-5"
+    - "CD22"
+    - "CD74"
+    - "MS4A1"
+    - "CD79A"
+    - "MEF2B"
+    - "KLHL6"
+    - "PFN1"
+    - "IRAG2"
+    - "SEL1L3"
+    - "H1-2"
+    - "RFTN1"
+    - "MYBL2"
+    - "TCF3"
+    - "EZR"
+    - "OAZ1"
+    - "POU2AF1"

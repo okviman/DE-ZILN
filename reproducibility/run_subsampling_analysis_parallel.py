@@ -9,6 +9,14 @@ cell-level counts and run the same analysis as the celltype pipeline.
 
 Usage:
     python run_subsampling_analysis_parallel.py --config config.yaml [--output-dir output/] [--n-workers 8]
+
+Optional in config (defaults used if omitted):
+  - min_cells_per_gene (int): genes must be expressed in at least that many cells in
+    *each* group to be kept; otherwise dropped before DE.
+  - min_spots_per_cell (int, default 5): cells with fewer than this many 2um spots after
+    subsampling are excluded.
+  - min_counts_after_subsampling (int, default 20): cells whose chosen 2um spots have total
+    UMI count less than this are excluded (not included in the aggregated matrix).
 """
 
 import os
@@ -79,6 +87,9 @@ warnings.filterwarnings("ignore")
 
 K_VALUES = [10, 20, 50, 100]
 PVAL_THRESHOLD = 0.05
+# Defaults for optional config keys (overridden by YAML if present)
+DEFAULT_MIN_SPOTS_PER_CELL = 5
+DEFAULT_MIN_COUNTS_AFTER_SUBSAMPLING = 20
 
 
 def _plot_box_pandas(df, x_col, y_col, hue_col, ax=None):
@@ -171,6 +182,9 @@ def init_worker(
     skip_mast=False,
     skip_gsea=False,
     order_only=False,
+    min_cells_per_gene=None,
+    min_spots_per_cell=None,
+    min_counts_after_subsampling=None,
 ):
     """Initialize worker with shared memory references (Python 3.8+)."""
     global _shared_data
@@ -194,9 +208,12 @@ def init_worker(
     _shared_data["skip_mast"] = skip_mast
     _shared_data["skip_gsea"] = skip_gsea
     _shared_data["order_only"] = order_only
+    _shared_data["min_cells_per_gene"] = min_cells_per_gene
+    _shared_data["min_spots_per_cell"] = min_spots_per_cell
+    _shared_data["min_counts_after_subsampling"] = min_counts_after_subsampling
 
 
-def init_worker_load_from_path(adata_path, cluster_column, cell_id_column, markers, top_genes, skip_mast=False, skip_gsea=False, order_only=False):
+def init_worker_load_from_path(adata_path, cluster_column, cell_id_column, markers, top_genes, skip_mast=False, skip_gsea=False, order_only=False, min_cells_per_gene=None, min_spots_per_cell=None, min_counts_after_subsampling=None):
     """Initialize worker by loading adata from disk (fallback when shared_memory not available, e.g. Python 3.7)."""
     global _shared_data
     _limit_threads()
@@ -222,6 +239,9 @@ def init_worker_load_from_path(adata_path, cluster_column, cell_id_column, marke
     _shared_data["skip_mast"] = skip_mast
     _shared_data["skip_gsea"] = skip_gsea
     _shared_data["order_only"] = order_only
+    _shared_data["min_cells_per_gene"] = min_cells_per_gene
+    _shared_data["min_spots_per_cell"] = min_spots_per_cell
+    _shared_data["min_counts_after_subsampling"] = min_counts_after_subsampling
 
 
 def process_task(task):
@@ -244,28 +264,38 @@ def process_task(task):
     skip_mast = _shared_data.get("skip_mast", False)
     skip_gsea = _shared_data.get("skip_gsea", False)
     order_only = _shared_data.get("order_only", False)
+    min_cells_per_gene = _shared_data.get("min_cells_per_gene")
+    min_spots_per_cell = _shared_data.get("min_spots_per_cell", DEFAULT_MIN_SPOTS_PER_CELL)
+    min_counts_after_subsampling = _shared_data.get("min_counts_after_subsampling", DEFAULT_MIN_COUNTS_AFTER_SUBSAMPLING)
 
     np.random.seed(replicate)
     unique_cells = np.unique(cell_ids)
-    n_cells = len(unique_cells)
     n_genes = X.shape[1]
     cell_to_cluster = {cell_ids[i]: clusters[i] for i in range(len(cell_ids))}
 
-    aggregated_counts = np.zeros((n_cells, n_genes), dtype=np.float32)
+    count_list = []
     cell_order = []
     cluster_assignments = []
-    for i, cell_id in enumerate(unique_cells):
+    for cell_id in unique_cells:
         spot_indices = np.where(cell_ids == cell_id)[0]
         n_spots = len(spot_indices)
         n_select = max(1, int(np.round(n_spots * fraction)))
+        if n_select < min_spots_per_cell:
+            continue
         if n_select >= n_spots:
             selected_indices = spot_indices
         else:
             selected_indices = np.random.choice(spot_indices, size=n_select, replace=False)
         cell_counts = np.asarray(X[selected_indices, :].sum(axis=0)).flatten()
-        aggregated_counts[i, :] = cell_counts
+        if cell_counts.sum() < min_counts_after_subsampling:
+            continue
+        count_list.append(cell_counts)
         cell_order.append(cell_id)
         cluster_assignments.append(cell_to_cluster[cell_id])
+
+    if len(count_list) == 0:
+        return [], time.time() - t0  # no cells passed the minimum-spot threshold
+    aggregated_counts = np.array(count_list, dtype=np.float32)
 
     adata_agg = sc.AnnData(
         X=sparse.csr_matrix(aggregated_counts),
@@ -277,6 +307,49 @@ def process_task(task):
     )
     adata_agg.obs[cluster_column] = pd.Categorical(adata_agg.obs[cluster_column])
 
+    # Iterative filter so the final dataset satisfies both: (1) each gene has >= min_cells_per_gene
+    # expressing cells in each group, (2) each cell has total UMI (on kept genes) >= min_counts_after_subsampling.
+    max_filter_iter = 50
+    for _ in range(max_filter_iter):
+        n_obs_before, n_vars_before = adata_agg.n_obs, adata_agg.n_vars
+        X = adata_agg.X
+        clusters_agg = adata_agg.obs[cluster_column].values
+
+        # (1) Drop genes not expressed in >= min_cells_per_gene cells in each group
+        if min_cells_per_gene is not None and min_cells_per_gene > 0:
+            keep_genes = np.ones(adata_agg.n_vars, dtype=bool)
+            for cl in np.unique(clusters_agg):
+                mask_cells = clusters_agg == cl
+                if sparse.issparse(X):
+                    n_cells_per_gene = np.asarray((X[mask_cells, :] > 0).sum(axis=0)).ravel()
+                else:
+                    n_cells_per_gene = (X[mask_cells, :] > 0).sum(axis=0)
+                keep_genes &= (n_cells_per_gene >= min_cells_per_gene)
+            adata_agg = adata_agg[:, keep_genes].copy()
+            X = adata_agg.X
+
+        # (2) Drop cells whose total UMI (on current genes) is below min_counts_after_subsampling
+        if min_counts_after_subsampling is not None and min_counts_after_subsampling > 0:
+            if sparse.issparse(X):
+                total_umi_per_cell = np.asarray(X.sum(axis=1)).ravel()
+            else:
+                total_umi_per_cell = X.sum(axis=1)
+            keep_cells = total_umi_per_cell >= min_counts_after_subsampling
+            adata_agg = adata_agg[keep_cells, :].copy()
+
+        if adata_agg.n_obs == 0 or adata_agg.n_vars == 0:
+            break
+        if adata_agg.n_obs == n_obs_before and adata_agg.n_vars == n_vars_before:
+            break
+
+    if adata_agg.n_vars == 0 or adata_agg.n_obs == 0:
+        return [], time.time() - t0  # no genes or no cells after filtering; skip DE
+
+    # For one-vs-rest DE we need at least 2 groups with >= 1 cell each (so "rest" is non-empty)
+    clusters_present = adata_agg.obs[cluster_column].value_counts()
+    if (clusters_present >= 1).sum() < 2:
+        return [], time.time() - t0  # not enough groups for DE; skip
+
     # DE via de_utils (same as celltype: layers + LN, t-test, wilcoxon, MAST) with per-method timing
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -284,7 +357,7 @@ def process_task(task):
         prepare_adata_layers(adata_agg)
         time_layers_s = time.time() - t_layers
         t_ln = time.time()
-        run_ln_de(adata_agg, cluster_column, key_added="ln_test", layer="norm_counts", sparse=True)
+        run_ln_de(adata_agg, cluster_column, key_added="ln_test", layer="counts", sparse=True)
         time_ln_s = time.time() - t_ln
         t_ttest = time.time()
         run_ttest_de(adata_agg, cluster_column, key_added="t_test", layer="log1p_norm", use_raw=False)
@@ -442,11 +515,18 @@ def main():
 
     config = load_config(args.config)
     os.makedirs(args.output_dir, exist_ok=True)
+    min_spots_per_cell = config.get("min_spots_per_cell", DEFAULT_MIN_SPOTS_PER_CELL)
+    min_counts_after_subsampling = config.get("min_counts_after_subsampling", DEFAULT_MIN_COUNTS_AFTER_SUBSAMPLING)
     print(f"\n[1/7] Config loaded. Fractions: {config['subsampling_fractions']}, Replicates: {config['n_replicates']}")
+    print(f"  min_spots_per_cell: {min_spots_per_cell} (cells with fewer spots after subsampling are excluded)")
+    print(f"  min_counts_after_subsampling: {min_counts_after_subsampling} (cells with total UMIs below this after subsampling are excluded)")
     if args.skip_mast:
         print("  --skip-mast: MAST DE disabled (faster run)")
     if args.order_only:
         print("  --order-only: AUPR/GSEA use rank order only (ignore score magnitude)")
+    min_cells = config.get("min_cells_per_gene")
+    if min_cells is not None and min_cells > 0:
+        print(f"  min_cells_per_gene: {min_cells} (genes must be expressed in >= {min_cells} cells in *each* group to be kept)")
     if not USE_SHARED_MEMORY:
         print("  (Python < 3.8: each worker will load adata from disk; no shared memory)")
 
@@ -493,6 +573,9 @@ def main():
             args.skip_mast,
             args.skip_gsea,
             args.order_only,
+            config.get("min_cells_per_gene"),
+            min_spots_per_cell,
+            min_counts_after_subsampling,
         )
         initializer = init_worker
     else:
@@ -507,6 +590,9 @@ def main():
             args.skip_mast,
             args.skip_gsea,
             args.order_only,
+            config.get("min_cells_per_gene"),
+            min_spots_per_cell,
+            min_counts_after_subsampling,
         )
         initializer = init_worker_load_from_path
 

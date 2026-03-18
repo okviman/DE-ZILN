@@ -1,18 +1,112 @@
+from __future__ import annotations
 import numpy as np
 import scipy.stats as stats
 from scipy.stats.distributions import t
+# from scipy.special import polygamma
+# from typing import Optional, Sequence
+# import math
+
+from typing import Union, Iterable
+
+
+class _TrigammaDiffCache:
+    """
+    prefix[k] = sum_{j=1..k} 1/j^2   (prefix[0] = 0)
+    sum_{j=a..n-1} 1/j^2 = prefix[n-1] - prefix[a-1]
+    """
+    def __init__(self):
+        self._prefix = [0.0]
+
+    def ensure(self, max_k: int) -> None:
+        cur = len(self._prefix) - 1
+        if max_k <= cur:
+            return
+
+        s = self._prefix[-1]
+        for j in range(cur + 1, max_k + 1):
+            s += 1.0 / (j * j)
+            self._prefix.append(s)
+
+
+_cache = _TrigammaDiffCache()
+
+
+def _to_positive_int_scalar(x) -> int:
+    """
+    Round to nearest integer and clamp to >= 1
+    """
+    xi = int(np.round(x))
+    return max(1, xi)
+
+
+def _to_positive_int_array(x):
+    """
+    Vectorized rounding and clamp to >= 1
+    """
+    xi = np.round(x).astype(int)
+    xi[xi <= 0] = 1
+    return xi
+
+
+def trigamma_diff_int(
+    a: Union[int, float, Iterable, np.ndarray],
+    n: Union[int, float]
+) -> Union[float, np.ndarray]:
+    """
+    Compute:
+        psi_1(a) - psi_1(n) = sum_{j=a..n-1} 1/j^2
+
+    - a can be scalar or array-like
+    - values are rounded to nearest integer
+    - all values are clamped to >= 1
+    - cache is used only for array input
+    """
+
+    # ---- convert n ----
+    n = _to_positive_int_scalar(n)
+
+    # ---------- Scalar case ----------
+    if np.isscalar(a):
+        a = _to_positive_int_scalar(a)
+
+        if a >= n:
+            return 0.0
+
+        s = 0.0
+        for j in range(a, n):
+            s += 1.0 / (j * j)
+        return s
+
+    # ---------- Array case ----------
+    a_arr = _to_positive_int_array(np.asarray(a))
+
+    # ensure cache up to n-1
+    if n > 1:
+        _cache.ensure(n - 1)
+
+    result = np.zeros_like(a_arr, dtype=float)
+
+    mask = (a_arr < n)
+
+    if np.any(mask):
+        prefix_n = _cache._prefix[n - 1]
+        result[mask] = (
+            prefix_n
+            - np.array([_cache._prefix[x - 1] for x in a_arr[mask]])
+        )
+
+    return result
 
 def digamma(x):
     return np.log(x) - 1 / (2 * x)
 
-
-def trigamma(x):
-    return 1 / x  # + 0.5 / (x ** 2)
-
+# def trigamma(x):
+#         return 1 / x  + 0.5 / (x ** 2) +  1/(6.0*x**3)
 
 def log_beta_param_estimates(a, b):
     mu = digamma(a) - digamma(a + b)
-    sigma_2 = trigamma(a) - trigamma(a + b)
+    #sigma_2 = trigamma(a) - trigamma(a + b)
+    sigma_2 = trigamma_diff_int(a,a + b)
     return mu, sigma_2
 
 
@@ -96,16 +190,18 @@ def get_LN_lfcs(Y_, X_, normalize=True, test='t', normalization='CP10K', return_
 
     G = Y_.shape[1]
     Y = Y_.astype(float).copy()
+    X = X_.astype(float).copy()
     n = Y.shape[0]
+    n_prime = X.shape[0]
+
     Y[Y <= 0] = np.nan  # Replace all non-positive with NaN
     n_plus = n - np.sum(np.isnan(Y), 0)
     all_zeros_Y = (n_plus == 0)
 
-    X = X_.astype(float).copy()
-    n_prime = X.shape[0]
     X[X <= 0] = np.nan
     n_plus_prime = n_prime - np.sum(np.isnan(X), 0)
     all_zeros_X = (n_plus_prime == 0)
+
 
     if normalize and (normalization == 'CP10K'):
         X = 1e4 * X / np.nansum(X, 1, keepdims=True)
@@ -147,12 +243,14 @@ def get_LN_lfcs(Y_, X_, normalize=True, test='t', normalization='CP10K', return_
     lfc = (log2_theta_hat_Y + log2_m_Y) - (log2_theta_hat_X + log2_m_X)
 
     # compute standard errors
-    se_Y_1 = trigamma(a_hat_Y) - trigamma(n)
+    #se_Y_1 = trigamma(a_hat_Y) - trigamma(n)
+    se_Y_1 = trigamma_diff_int(a_hat_Y,int(n))
     se_Y_2 = np.ones(G, dtype=np.float32)  # to avoid NaNs in SE when all counts are zero
     se_Y_2[~all_zeros_Y] = np.log(1 + np.nanvar(Y[:, ~all_zeros_Y], axis=0) / (n_plus[~all_zeros_Y] * (2 ** log2_m_Y[~all_zeros_Y]) ** 2))
     se_Y = np.sqrt(se_Y_1 + se_Y_2) / np.log(2)
 
-    se_X_1 = trigamma(a_hat_X) - trigamma(n_prime)
+    #se_X_1 = trigamma(a_hat_X) - trigamma(n_prime)
+    se_X_1 = trigamma_diff_int(a_hat_X,int(n_prime))
     se_X_2 = np.ones(G, dtype=np.float32)
     se_X_2[~all_zeros_X] = np.log(1 + np.nanvar(X[:, ~all_zeros_X], axis=0) / (n_plus_prime[~all_zeros_X] * (2 ** log2_m_X[~all_zeros_X]) ** 2))
     se_X = np.sqrt(se_X_1 + se_X_2) / np.log(2)
@@ -344,6 +442,7 @@ def get_LN_lfcs_sparse(
     a_hat_X = np.ones(G, dtype=np.float64)
     a_hat_X[~all_zeros_X] = n_plus_prime[~all_zeros_X]
 
+
     # log2 theta hats
     log2_theta_hat_Y = np.log2(a_hat_Y / float(n))
     log2_theta_hat_X = np.log2(a_hat_X / float(n_prime))
@@ -353,13 +452,12 @@ def get_LN_lfcs_sparse(
     log2_m_Y = np.log2(np.maximum(pos_mean_Y, eps))
     log2_m_X = np.log2(np.maximum(pos_mean_X, eps))
 
-    lfc = (log2_theta_hat_Y + log2_m_Y) - (log2_theta_hat_X + log2_m_X)
+    se_Y_1 = trigamma_diff_int(a_hat_Y, int(n))
+    se_X_1 = trigamma_diff_int(a_hat_X, int(n_prime))
 
-    # Standard errors
-    # NOTE: uses your trigamma + log(1 + var/(n_plus*mean^2)) structure.
-    # Assumes trigamma is defined in your module (e.g. from scipy.special import polygamma; trigamma = lambda x: polygamma(1, x))
-    se_Y_1 = trigamma(a_hat_Y) - trigamma(float(n))
-    se_X_1 = trigamma(a_hat_X) - trigamma(float(n_prime))
+    mu_Y = log2_theta_hat_Y + log2_m_Y
+    mu_X = log2_theta_hat_X + log2_m_X
+    lfc = mu_Y - mu_X
 
     se_Y_2 = np.ones(G, dtype=np.float64)
     se_X_2 = np.ones(G, dtype=np.float64)
@@ -375,9 +473,6 @@ def get_LN_lfcs_sparse(
 
     se_Y = np.sqrt(np.maximum(se_Y_1 + se_Y_2, 0.0)) / np.log(2.0)
     se_X = np.sqrt(np.maximum(se_X_1 + se_X_2, 0.0)) / np.log(2.0)
-
-    mu_Y = log2_theta_hat_Y + log2_m_Y
-    mu_X = log2_theta_hat_X + log2_m_X
 
     if test == "t":
         statistic, p_vals = get_t_statistic(mu_Y, mu_X, se_Y, se_X, n, n_prime)
