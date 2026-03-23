@@ -6,7 +6,15 @@ min_cells_per_gene: 2
 min_spots_per_cell: 3
 # Cells with total UMI count below this after subsampling are excluded (default 20)
 min_counts_after_subsampling: 20
-subsampling_fractions: [0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]
+# Minimum number of genes after filtering for a base sampling to be considered valid (default 500)
+min_genes: 500
+# If true, all p values use the gene set from p_base (fixed per replicate).
+# If false (default), higher p values re-discover genes via min_cells_per_gene filtering.
+same_gene_sets_all_p: false
+# If true, only cells that had at least one spot selected at p_base can appear at higher p.
+# If false (default), cells with zero spots at p_base may gain spots via conditional Bernoulli.
+same_cells_all_p: true
+subsampling_fractions: [0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]
 n_replicates: 50
 top_genes: 20
 cluster_column: "Cluster"

@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """
-Parallelized sub-sampling effect analysis using shared memory.
+Parallelized sub-sampling effect analysis using shared memory and nested sampling.
+
+Uses a nested Binomial sampling design: the gene set is fixed at the lowest
+valid fraction (p_base), and spot selections are extended to higher fractions
+using conditional Bernoulli draws. This ensures the gene universe is identical
+across all p values for a given replicate, making metrics directly comparable.
 
 Uses de_utils for DE (LN, t-test, wilcoxon, MAST) and evaluation_utils for
 all metrics (Jaccard, AUPRC, precision@k, avg |LFC|, n_sig_genes).
@@ -17,6 +22,8 @@ Optional in config (defaults used if omitted):
     subsampling are excluded.
   - min_counts_after_subsampling (int, default 20): cells whose chosen 2um spots have total
     UMI count less than this are excluded (not included in the aggregated matrix).
+  - min_genes (int, default 500): minimum number of genes after filtering for a base
+    sampling to be considered valid.
 """
 
 import os
@@ -53,6 +60,8 @@ import scanpy as sc
 import seaborn as sns
 import matplotlib.pyplot as plt
 from scipy import sparse
+import json
+import pickle
 import yaml
 
 from de_utils import (
@@ -90,6 +99,8 @@ PVAL_THRESHOLD = 0.05
 # Defaults for optional config keys (overridden by YAML if present)
 DEFAULT_MIN_SPOTS_PER_CELL = 5
 DEFAULT_MIN_COUNTS_AFTER_SUBSAMPLING = 20
+DEFAULT_MIN_GENES = 500
+DEFAULT_MAX_CANDIDATES_FACTOR = 10
 
 
 def _plot_box_pandas(df, x_col, y_col, hue_col, ax=None):
@@ -139,6 +150,172 @@ def load_config(config_path):
     return config
 
 
+def find_valid_base_samplings(X_csr, cell_ids, clusters, var_names, fractions_sorted,
+                               n_replicates, min_genes, min_spots_per_cell,
+                               min_counts_after_subsampling, min_cells_per_gene,
+                               max_candidates_factor=DEFAULT_MAX_CANDIDATES_FACTOR):
+    """Find n_replicates valid base samplings at the lowest possible fraction.
+
+    Uses Binomial (independent Bernoulli per spot) sampling.  For each candidate,
+    stores the exact spot indices selected for every cell (including cells that
+    fail filters, so they can re-enter at higher fractions) and the gene set
+    that survives iterative filtering.
+
+    Returns
+    -------
+    p_base : float
+    valid_samplings : list of dicts with keys 'spots', 'genes', 'n_genes', 'n_cells',
+        'valid_cells'
+    """
+    unique_cells = np.unique(cell_ids)
+    cell_spot_map = {}
+    cell_to_cluster = {}
+    for cid in unique_cells:
+        indices = np.where(cell_ids == cid)[0]
+        cell_spot_map[cid] = indices
+        cell_to_cluster[cid] = clusters[indices[0]]
+
+    for p in fractions_sorted:
+        valid_samplings = []
+        max_candidates = max_candidates_factor * n_replicates
+        print(f"  Trying p={p}: up to {max_candidates} candidates...")
+
+        for seed in range(max_candidates):
+            rng = np.random.RandomState(seed)
+
+            spots_per_cell = {}
+            for cid in unique_cells:
+                spot_indices = cell_spot_map[cid]
+                mask = rng.random(len(spot_indices)) < p
+                spots_per_cell[cid] = spot_indices[mask]
+
+            count_list = []
+            cell_order = []
+            cluster_assignments = []
+            for cid in unique_cells:
+                sel = spots_per_cell[cid]
+                if len(sel) < min_spots_per_cell:
+                    continue
+                cell_counts = np.asarray(X_csr[sel, :].sum(axis=0)).flatten()
+                if cell_counts.sum() < min_counts_after_subsampling:
+                    continue
+                count_list.append(cell_counts)
+                cell_order.append(cid)
+                cluster_assignments.append(cell_to_cluster[cid])
+
+            if len(count_list) == 0:
+                continue
+
+            aggregated = np.array(count_list, dtype=np.float32)
+            adata_tmp = sc.AnnData(
+                X=sparse.csr_matrix(aggregated),
+                obs=pd.DataFrame(
+                    {"_cluster": cluster_assignments},
+                    index=[str(c) for c in cell_order],
+                ),
+                var=pd.DataFrame(index=var_names),
+            )
+            adata_tmp.obs["_cluster"] = pd.Categorical(adata_tmp.obs["_cluster"])
+
+            for _ in range(50):
+                n_obs_before, n_vars_before = adata_tmp.n_obs, adata_tmp.n_vars
+                Xf = adata_tmp.X
+                cl_vals = adata_tmp.obs["_cluster"].values
+
+                if min_cells_per_gene is not None and min_cells_per_gene > 0:
+                    keep_genes = np.ones(adata_tmp.n_vars, dtype=bool)
+                    for cl in np.unique(cl_vals):
+                        mask_c = cl_vals == cl
+                        if sparse.issparse(Xf):
+                            ncpg = np.asarray((Xf[mask_c, :] > 0).sum(axis=0)).ravel()
+                        else:
+                            ncpg = (Xf[mask_c, :] > 0).sum(axis=0)
+                        keep_genes &= (ncpg >= min_cells_per_gene)
+                    adata_tmp = adata_tmp[:, keep_genes].copy()
+                    Xf = adata_tmp.X
+
+                if min_counts_after_subsampling is not None and min_counts_after_subsampling > 0:
+                    if sparse.issparse(Xf):
+                        total_umi = np.asarray(Xf.sum(axis=1)).ravel()
+                    else:
+                        total_umi = Xf.sum(axis=1)
+                    keep_cells = total_umi >= min_counts_after_subsampling
+                    adata_tmp = adata_tmp[keep_cells, :].copy()
+
+                if adata_tmp.n_obs == 0 or adata_tmp.n_vars == 0:
+                    break
+                if adata_tmp.n_obs == n_obs_before and adata_tmp.n_vars == n_vars_before:
+                    break
+
+            if adata_tmp.n_vars < min_genes or adata_tmp.n_obs == 0:
+                continue
+
+            clusters_present = adata_tmp.obs["_cluster"].value_counts()
+            if (clusters_present >= 1).sum() < 2:
+                continue
+
+            valid_cells = [idx.strip() for idx in adata_tmp.obs.index]
+            valid_samplings.append({
+                'spots': spots_per_cell,
+                'genes': list(adata_tmp.var_names),
+                'n_genes': adata_tmp.n_vars,
+                'n_cells': adata_tmp.n_obs,
+                'valid_cells': valid_cells,
+            })
+            print(f"    Seed {seed}: VALID ({adata_tmp.n_vars} genes, "
+                  f"{adata_tmp.n_obs} cells) [{len(valid_samplings)}/{n_replicates}]")
+
+            if len(valid_samplings) == n_replicates:
+                break
+
+        if len(valid_samplings) == n_replicates:
+            print(f"  => p_base = {p} ({n_replicates} valid samplings found)")
+            return p, valid_samplings
+        else:
+            print(f"  WARNING: p={p} only produced "
+                  f"{len(valid_samplings)}/{n_replicates} valid samplings, skipping")
+
+    raise RuntimeError(
+        f"No fraction produced {n_replicates} valid samplings with >= {min_genes} genes. "
+        f"Tried fractions: {fractions_sorted}"
+    )
+
+
+def extend_spots_binomial(base_spots, cell_spot_map, p_base, p, rng,
+                          restrict_to_base_cells=False):
+    """Extend base spot selections to a higher fraction using conditional Bernoulli.
+
+    Each spot NOT in the base set is independently included with probability
+    q = (p - p_base) / (1 - p_base), giving marginal inclusion probability p.
+
+    If restrict_to_base_cells is True, cells that had zero spots at p_base are
+    kept empty (no new spots drawn), so only cells already present at p_base
+    can appear at higher fractions.
+    """
+    q = (p - p_base) / (1.0 - p_base)
+    extended = {}
+    for cell_id, all_spots in cell_spot_map.items():
+        base = base_spots.get(cell_id, np.array([], dtype=np.intp))
+        if len(base) == 0:
+            if restrict_to_base_cells:
+                extended[cell_id] = np.array([], dtype=np.intp)
+            else:
+                mask = rng.random(len(all_spots)) < q
+                extended[cell_id] = all_spots[mask]
+        elif len(base) >= len(all_spots):
+            extended[cell_id] = all_spots.copy()
+        else:
+            base_set = set(base.tolist())
+            remaining_mask = np.array([s not in base_set for s in all_spots])
+            remaining = all_spots[remaining_mask]
+            if len(remaining) == 0:
+                extended[cell_id] = base.copy()
+            else:
+                add_mask = rng.random(len(remaining)) < q
+                extended[cell_id] = np.concatenate([base, remaining[add_mask]])
+    return extended
+
+
 # ---- Shared memory and worker ----
 
 _shared_data = {}
@@ -185,6 +362,10 @@ def init_worker(
     min_cells_per_gene=None,
     min_spots_per_cell=None,
     min_counts_after_subsampling=None,
+    p_base=None,
+    base_samplings_path=None,
+    same_gene_sets_all_p=False,
+    same_cells_all_p=False,
 ):
     """Initialize worker with shared memory references (Python 3.8+)."""
     global _shared_data
@@ -211,9 +392,15 @@ def init_worker(
     _shared_data["min_cells_per_gene"] = min_cells_per_gene
     _shared_data["min_spots_per_cell"] = min_spots_per_cell
     _shared_data["min_counts_after_subsampling"] = min_counts_after_subsampling
+    _shared_data["p_base"] = p_base
+    _shared_data["same_gene_sets_all_p"] = same_gene_sets_all_p
+    _shared_data["same_cells_all_p"] = same_cells_all_p
+    if base_samplings_path is not None:
+        with open(base_samplings_path, "rb") as f:
+            _shared_data["base_samplings"] = pickle.load(f)
 
 
-def init_worker_load_from_path(adata_path, cluster_column, cell_id_column, markers, top_genes, skip_mast=False, skip_gsea=False, order_only=False, min_cells_per_gene=None, min_spots_per_cell=None, min_counts_after_subsampling=None):
+def init_worker_load_from_path(adata_path, cluster_column, cell_id_column, markers, top_genes, skip_mast=False, skip_gsea=False, order_only=False, min_cells_per_gene=None, min_spots_per_cell=None, min_counts_after_subsampling=None, p_base=None, base_samplings_path=None, same_gene_sets_all_p=False, same_cells_all_p=False):
     """Initialize worker by loading adata from disk (fallback when shared_memory not available, e.g. Python 3.7)."""
     global _shared_data
     _limit_threads()
@@ -242,10 +429,22 @@ def init_worker_load_from_path(adata_path, cluster_column, cell_id_column, marke
     _shared_data["min_cells_per_gene"] = min_cells_per_gene
     _shared_data["min_spots_per_cell"] = min_spots_per_cell
     _shared_data["min_counts_after_subsampling"] = min_counts_after_subsampling
+    _shared_data["p_base"] = p_base
+    _shared_data["same_gene_sets_all_p"] = same_gene_sets_all_p
+    _shared_data["same_cells_all_p"] = same_cells_all_p
+    if base_samplings_path is not None:
+        with open(base_samplings_path, "rb") as f:
+            _shared_data["base_samplings"] = pickle.load(f)
 
 
 def process_task(task):
-    """Process a single (fraction, replicate) task: subsample -> aggregate -> DE (de_utils) -> metrics (evaluation_utils)."""
+    """Process a single (fraction, replicate) task with nested sampling.
+
+    Uses the base spot selections from p_base (loaded via base_samplings) and extends
+    them to the target fraction using conditional Bernoulli draws.  When
+    same_gene_sets_all_p is True (or at p_base), the gene set is fixed per replicate.
+    Otherwise, genes are re-discovered via iterative min_cells_per_gene filtering.
+    """
     t0 = time.time()
     fraction, replicate = task
     global _shared_data
@@ -264,93 +463,153 @@ def process_task(task):
     skip_mast = _shared_data.get("skip_mast", False)
     skip_gsea = _shared_data.get("skip_gsea", False)
     order_only = _shared_data.get("order_only", False)
-    min_cells_per_gene = _shared_data.get("min_cells_per_gene")
     min_spots_per_cell = _shared_data.get("min_spots_per_cell", DEFAULT_MIN_SPOTS_PER_CELL)
     min_counts_after_subsampling = _shared_data.get("min_counts_after_subsampling", DEFAULT_MIN_COUNTS_AFTER_SUBSAMPLING)
+    p_base = _shared_data["p_base"]
+    base_samplings = _shared_data["base_samplings"]
 
-    np.random.seed(replicate)
-    unique_cells = np.unique(cell_ids)
-    n_genes = X.shape[1]
-    cell_to_cluster = {cell_ids[i]: clusters[i] for i in range(len(cell_ids))}
+    # Lazy-init cached lookups (computed once per worker, reused across tasks)
+    if "cell_spot_map" not in _shared_data:
+        unique_cells = np.unique(cell_ids)
+        csm = {}
+        ctc = {}
+        for c in unique_cells:
+            c_stripped = c.strip()
+            csm[c_stripped] = np.where(cell_ids == c)[0]
+            ctc[c_stripped] = clusters[np.where(cell_ids == c)[0][0]].strip()
+        _shared_data["cell_spot_map"] = csm
+        _shared_data["cell_to_cluster"] = ctc
+    if "var_name_to_idx" not in _shared_data:
+        _shared_data["var_name_to_idx"] = {g: i for i, g in enumerate(var_names)}
 
-    count_list = []
-    cell_order = []
-    cluster_assignments = []
-    for cell_id in unique_cells:
-        spot_indices = np.where(cell_ids == cell_id)[0]
-        n_spots = len(spot_indices)
-        n_select = max(1, int(np.round(n_spots * fraction)))
-        if n_select < min_spots_per_cell:
-            continue
-        if n_select >= n_spots:
-            selected_indices = spot_indices
-        else:
-            selected_indices = np.random.choice(spot_indices, size=n_select, replace=False)
-        cell_counts = np.asarray(X[selected_indices, :].sum(axis=0)).flatten()
-        if cell_counts.sum() < min_counts_after_subsampling:
-            continue
-        count_list.append(cell_counts)
-        cell_order.append(cell_id)
-        cluster_assignments.append(cell_to_cluster[cell_id])
+    cell_spot_map = _shared_data["cell_spot_map"]
+    cell_to_cluster = _shared_data["cell_to_cluster"]
+    var_name_to_idx = _shared_data["var_name_to_idx"]
 
-    if len(count_list) == 0:
-        return [], time.time() - t0  # no cells passed the minimum-spot threshold
-    aggregated_counts = np.array(count_list, dtype=np.float32)
+    base_sampling = base_samplings[replicate]
+    base_spots_dict = base_sampling['spots']
+    min_cells_per_gene = _shared_data.get("min_cells_per_gene")
+    same_gene_sets_all_p = _shared_data.get("same_gene_sets_all_p", False)
+    same_cells_all_p = _shared_data.get("same_cells_all_p", False)
 
-    adata_agg = sc.AnnData(
-        X=sparse.csr_matrix(aggregated_counts),
-        obs=pd.DataFrame(
-            {cell_id_column: cell_order, cluster_column: cluster_assignments},
-            index=[str(c) for c in cell_order],
-        ),
-        var=pd.DataFrame(index=var_names),
-    )
+    rng = np.random.RandomState(replicate * 100000 + int(round(fraction * 100000)))
+
+    at_base = abs(fraction - p_base) < 1e-9
+    if at_base:
+        selected_spots = base_spots_dict
+    else:
+        selected_spots = extend_spots_binomial(
+            base_spots_dict, cell_spot_map, p_base, fraction, rng,
+            restrict_to_base_cells=same_cells_all_p,
+        )
+
+    use_fixed_genes = same_gene_sets_all_p or at_base
+
+    if same_cells_all_p and not at_base:
+        cells_to_iterate = base_sampling['valid_cells']
+    else:
+        cells_to_iterate = list(cell_spot_map.keys())
+
+    if use_fixed_genes:
+        gene_set_list = base_sampling['genes']
+        gene_indices = np.array([var_name_to_idx[g] for g in gene_set_list])
+
+        count_list = []
+        cell_order = []
+        cluster_assignments = []
+        for cell_id in cells_to_iterate:
+            sel = selected_spots.get(cell_id, np.array([], dtype=np.intp))
+            if len(sel) < min_spots_per_cell:
+                continue
+            cell_counts = np.asarray(X[sel, :][:, gene_indices].sum(axis=0)).flatten()
+            if cell_counts.sum() < min_counts_after_subsampling:
+                continue
+            count_list.append(cell_counts)
+            cell_order.append(cell_id)
+            cluster_assignments.append(cell_to_cluster[cell_id])
+
+        if len(count_list) == 0:
+            return [], time.time() - t0
+
+        aggregated_counts = np.array(count_list, dtype=np.float32)
+        adata_agg = sc.AnnData(
+            X=sparse.csr_matrix(aggregated_counts),
+            obs=pd.DataFrame(
+                {cell_id_column: cell_order, cluster_column: cluster_assignments},
+                index=[str(c) for c in cell_order],
+            ),
+            var=pd.DataFrame(index=gene_set_list),
+        )
+    else:
+        count_list = []
+        cell_order = []
+        cluster_assignments = []
+        for cell_id in cells_to_iterate:
+            sel = selected_spots.get(cell_id, np.array([], dtype=np.intp))
+            if len(sel) < min_spots_per_cell:
+                continue
+            cell_counts = np.asarray(X[sel, :].sum(axis=0)).flatten()
+            count_list.append(cell_counts)
+            cell_order.append(cell_id)
+            cluster_assignments.append(cell_to_cluster[cell_id])
+
+        if len(count_list) == 0:
+            return [], time.time() - t0
+
+        aggregated_counts = np.array(count_list, dtype=np.float32)
+        adata_agg = sc.AnnData(
+            X=sparse.csr_matrix(aggregated_counts),
+            obs=pd.DataFrame(
+                {cell_id_column: cell_order, cluster_column: cluster_assignments},
+                index=[str(c) for c in cell_order],
+            ),
+            var=pd.DataFrame(index=var_names),
+        )
+        adata_agg.obs[cluster_column] = pd.Categorical(adata_agg.obs[cluster_column])
+
+        for _ in range(50):
+            n_obs_before, n_vars_before = adata_agg.n_obs, adata_agg.n_vars
+            Xf = adata_agg.X
+            if min_cells_per_gene is not None and min_cells_per_gene > 0:
+                keep_genes = np.ones(adata_agg.n_vars, dtype=bool)
+                cl_vals = adata_agg.obs[cluster_column].values
+                for cl in np.unique(cl_vals):
+                    mask_c = cl_vals == cl
+                    if sparse.issparse(Xf):
+                        ncpg = np.asarray((Xf[mask_c, :] > 0).sum(axis=0)).ravel()
+                    else:
+                        ncpg = (Xf[mask_c, :] > 0).sum(axis=0)
+                    keep_genes &= (ncpg >= min_cells_per_gene)
+                adata_agg = adata_agg[:, keep_genes].copy()
+                Xf = adata_agg.X
+            if min_counts_after_subsampling is not None and min_counts_after_subsampling > 0:
+                if sparse.issparse(Xf):
+                    total_umi = np.asarray(Xf.sum(axis=1)).ravel()
+                else:
+                    total_umi = Xf.sum(axis=1)
+                keep_cells = total_umi >= min_counts_after_subsampling
+                adata_agg = adata_agg[keep_cells, :].copy()
+            if adata_agg.n_obs == 0 or adata_agg.n_vars == 0:
+                break
+            if adata_agg.n_obs == n_obs_before and adata_agg.n_vars == n_vars_before:
+                break
+
+        gene_set_list = list(adata_agg.var_names)
+
+    n_genes_used = len(gene_set_list)
     adata_agg.obs[cluster_column] = pd.Categorical(adata_agg.obs[cluster_column])
 
-    # Iterative filter so the final dataset satisfies both: (1) each gene has >= min_cells_per_gene
-    # expressing cells in each group, (2) each cell has total UMI (on kept genes) >= min_counts_after_subsampling.
-    max_filter_iter = 50
-    for _ in range(max_filter_iter):
-        n_obs_before, n_vars_before = adata_agg.n_obs, adata_agg.n_vars
-        X = adata_agg.X
-        clusters_agg = adata_agg.obs[cluster_column].values
-
-        # (1) Drop genes not expressed in >= min_cells_per_gene cells in each group
-        if min_cells_per_gene is not None and min_cells_per_gene > 0:
-            keep_genes = np.ones(adata_agg.n_vars, dtype=bool)
-            for cl in np.unique(clusters_agg):
-                mask_cells = clusters_agg == cl
-                if sparse.issparse(X):
-                    n_cells_per_gene = np.asarray((X[mask_cells, :] > 0).sum(axis=0)).ravel()
-                else:
-                    n_cells_per_gene = (X[mask_cells, :] > 0).sum(axis=0)
-                keep_genes &= (n_cells_per_gene >= min_cells_per_gene)
-            adata_agg = adata_agg[:, keep_genes].copy()
-            X = adata_agg.X
-
-        # (2) Drop cells whose total UMI (on current genes) is below min_counts_after_subsampling
-        if min_counts_after_subsampling is not None and min_counts_after_subsampling > 0:
-            if sparse.issparse(X):
-                total_umi_per_cell = np.asarray(X.sum(axis=1)).ravel()
-            else:
-                total_umi_per_cell = X.sum(axis=1)
-            keep_cells = total_umi_per_cell >= min_counts_after_subsampling
-            adata_agg = adata_agg[keep_cells, :].copy()
-
-        if adata_agg.n_obs == 0 or adata_agg.n_vars == 0:
-            break
-        if adata_agg.n_obs == n_obs_before and adata_agg.n_vars == n_vars_before:
-            break
-
     if adata_agg.n_vars == 0 or adata_agg.n_obs == 0:
-        return [], time.time() - t0  # no genes or no cells after filtering; skip DE
+        return [], time.time() - t0
 
-    # For one-vs-rest DE we need at least 2 groups with >= 1 cell each (so "rest" is non-empty)
     clusters_present = adata_agg.obs[cluster_column].value_counts()
     if (clusters_present >= 1).sum() < 2:
-        return [], time.time() - t0  # not enough groups for DE; skip
+        return [], time.time() - t0
 
-    # DE via de_utils (same as celltype: layers + LN, t-test, wilcoxon, MAST) with per-method timing
+    cluster_cell_counts = clusters_present.to_dict()
+    n_cells_total = adata_agg.n_obs
+
+    # DE via de_utils
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         t_layers = time.time()
@@ -375,7 +634,6 @@ def process_task(task):
                 mast_results = {}
         time_mast_s = time.time() - t_mast
 
-    # Metrics via evaluation_utils. Markers are per cluster: each cluster evaluated only vs its own ground-truth set.
     cluster_list = sorted(adata_agg.obs[cluster_column].unique())
     records = []
 
@@ -384,6 +642,8 @@ def process_task(task):
         marker_set = set(markers.get(cluster_key, []))
         if not marker_set:
             continue
+        n_cells_in_cluster = cluster_cell_counts.get(cluster, 0)
+        n_cells_in_other = n_cells_total - n_cells_in_cluster
         # LN test
         avg_lfc_ln = avg_abs_lfc_adata(adata_agg, cluster, key="ln_test", pval_threshold=PVAL_THRESHOLD)
         n_sig_ln = n_sig_genes_adata(adata_agg, cluster, key="ln_test", pval_threshold=PVAL_THRESHOLD, positive_score_only=True)
@@ -409,6 +669,8 @@ def process_task(task):
             "n_genes_de_table": n_genes_ln, "frac_de_genes_valid_score": frac_valid_ln,
             "de_time_s": time_ln_s,
             "fraction": fraction, "replicate": replicate,
+            "n_genes_used": n_genes_used, "p_base": p_base,
+            "n_cells_cluster": n_cells_in_cluster, "n_cells_other": n_cells_in_other,
         })
         # t-test
         avg_lfc_tt = avg_abs_lfc_adata(adata_agg, cluster, key="t_test", pval_threshold=PVAL_THRESHOLD)
@@ -435,6 +697,8 @@ def process_task(task):
             "n_genes_de_table": n_genes_tt, "frac_de_genes_valid_score": frac_valid_tt,
             "de_time_s": time_ttest_s,
             "fraction": fraction, "replicate": replicate,
+            "n_genes_used": n_genes_used, "p_base": p_base,
+            "n_cells_cluster": n_cells_in_cluster, "n_cells_other": n_cells_in_other,
         })
         # Wilcoxon
         avg_lfc_w = avg_abs_lfc_adata(adata_agg, cluster, key="wilcoxon", pval_threshold=PVAL_THRESHOLD)
@@ -458,8 +722,10 @@ def process_task(task):
             "n_genes_de_table": n_genes_w, "frac_de_genes_valid_score": frac_valid_w,
             "de_time_s": time_wilcoxon_s,
             "fraction": fraction, "replicate": replicate,
+            "n_genes_used": n_genes_used, "p_base": p_base,
+            "n_cells_cluster": n_cells_in_cluster, "n_cells_other": n_cells_in_other,
         })
-        # MAST (skip appending when --skip-mast)
+        # MAST
         if not skip_mast:
             mast_df = mast_results.get(str(cluster), None)
             avg_lfc_mast = avg_abs_lfc_df(mast_df, pval_threshold=PVAL_THRESHOLD)
@@ -475,23 +741,16 @@ def process_task(task):
             n_genes_mast = n_genes_de_table_df(mast_df) if mast_df is not None and len(mast_df) > 0 else 0
             frac_valid_mast = frac_de_genes_valid_score_df(mast_df) if mast_df is not None and len(mast_df) > 0 else np.nan
             records.append({
-                "cluster": cluster,
-                "method": "MAST",
-                "jaccard_top": jt,
-                "jaccard_all": ja,
-                "auprc": au,
-                "precision_at_10": pk.get(10, np.nan),
-                "precision_at_20": pk.get(20, np.nan),
-                "precision_at_50": pk.get(50, np.nan),
-                "precision_at_100": pk.get(100, np.nan),
-                "avg_abs_lfc": avg_lfc_mast,
-                "n_sig_genes": n_sig_mast,
-                "gsea_nes": gsea_mast,
-                "n_genes_de_table": n_genes_mast,
-                "frac_de_genes_valid_score": frac_valid_mast,
+                "cluster": cluster, "method": "MAST",
+                "jaccard_top": jt, "jaccard_all": ja, "auprc": au,
+                "precision_at_10": pk.get(10, np.nan), "precision_at_20": pk.get(20, np.nan),
+                "precision_at_50": pk.get(50, np.nan), "precision_at_100": pk.get(100, np.nan),
+                "avg_abs_lfc": avg_lfc_mast, "n_sig_genes": n_sig_mast, "gsea_nes": gsea_mast,
+                "n_genes_de_table": n_genes_mast, "frac_de_genes_valid_score": frac_valid_mast,
                 "de_time_s": time_mast_s,
-                "fraction": fraction,
-                "replicate": replicate,
+                "fraction": fraction, "replicate": replicate,
+                "n_genes_used": n_genes_used, "p_base": p_base,
+                "n_cells_cluster": n_cells_in_cluster, "n_cells_other": n_cells_in_other,
             })
 
     task_time = time.time() - t0
@@ -499,7 +758,7 @@ def process_task(task):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Parallelized sub-sampling analysis (DE via de_utils, metrics via evaluation_utils)")
+    parser = argparse.ArgumentParser(description="Parallelized sub-sampling analysis with nested Binomial sampling")
     parser.add_argument("--config", type=str, required=True, help="Path to YAML config")
     parser.add_argument("--output-dir", type=str, default="output_subsampling_parallel", help="Output directory")
     parser.add_argument("--n-workers", type=int, default=8, help="Number of parallel workers")
@@ -509,7 +768,7 @@ def main():
     args = parser.parse_args()
 
     print("\n" + "=" * 80)
-    print("PARALLELIZED SUB-SAMPLING ANALYSIS (reproducibility)")
+    print("PARALLELIZED SUB-SAMPLING ANALYSIS -- NESTED BINOMIAL DESIGN")
     print("=" * 80)
     print(f"Using {args.n_workers} workers, DE and metrics from de_utils / evaluation_utils")
 
@@ -517,41 +776,83 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
     min_spots_per_cell = config.get("min_spots_per_cell", DEFAULT_MIN_SPOTS_PER_CELL)
     min_counts_after_subsampling = config.get("min_counts_after_subsampling", DEFAULT_MIN_COUNTS_AFTER_SUBSAMPLING)
-    print(f"\n[1/7] Config loaded. Fractions: {config['subsampling_fractions']}, Replicates: {config['n_replicates']}")
-    print(f"  min_spots_per_cell: {min_spots_per_cell} (cells with fewer spots after subsampling are excluded)")
-    print(f"  min_counts_after_subsampling: {min_counts_after_subsampling} (cells with total UMIs below this after subsampling are excluded)")
+    min_cells_per_gene = config.get("min_cells_per_gene")
+    min_genes = config.get("min_genes", DEFAULT_MIN_GENES)
+    same_gene_sets_all_p = config.get("same_gene_sets_all_p", False)
+    same_cells_all_p = config.get("same_cells_all_p", False)
+    n_replicates = config["n_replicates"]
+    fractions = sorted(config["subsampling_fractions"])
+
+    print(f"\n[1/8] Config loaded. Fractions: {fractions}, Replicates: {n_replicates}")
+    print(f"  min_spots_per_cell: {min_spots_per_cell}")
+    print(f"  min_counts_after_subsampling: {min_counts_after_subsampling}")
+    print(f"  min_genes: {min_genes} (minimum genes after filtering for a valid base sampling)")
+    print(f"  same_gene_sets_all_p: {same_gene_sets_all_p}"
+          f" ({'gene sets fixed from p_base' if same_gene_sets_all_p else 'genes re-discovered per p'})")
+    print(f"  same_cells_all_p: {same_cells_all_p}"
+          f" ({'cells restricted to p_base set' if same_cells_all_p else 'new cells can appear at higher p'})")
     if args.skip_mast:
         print("  --skip-mast: MAST DE disabled (faster run)")
     if args.order_only:
         print("  --order-only: AUPR/GSEA use rank order only (ignore score magnitude)")
-    min_cells = config.get("min_cells_per_gene")
-    if min_cells is not None and min_cells > 0:
-        print(f"  min_cells_per_gene: {min_cells} (genes must be expressed in >= {min_cells} cells in *each* group to be kept)")
+    if min_cells_per_gene is not None and min_cells_per_gene > 0:
+        print(f"  min_cells_per_gene: {min_cells_per_gene}")
     if not USE_SHARED_MEMORY:
         print("  (Python < 3.8: each worker will load adata from disk; no shared memory)")
 
+    # ---- Load adata (needed for pre-sampling AND shared memory) ----
+    print(f"\n[2/8] Loading adata from {config['adata_path']}...")
+    adata = sc.read_h5ad(config["adata_path"])
+    if sparse.issparse(adata.X):
+        X_csr = adata.X.tocsr()
+    else:
+        X_csr = sparse.csr_matrix(adata.X)
+    cell_ids_arr = adata.obs[config["cell_id_column"]].astype(str).values
+    clusters_arr = adata.obs[config["cluster_column"]].astype(str).values
+    var_names_list = list(adata.var_names)
+    print(f"  {X_csr.shape[0]} spots x {X_csr.shape[1]} genes, "
+          f"{len(np.unique(cell_ids_arr))} cells")
+
+    # ---- Pre-sampling phase ----
+    print(f"\n[3/8] Pre-sampling phase: finding {n_replicates} valid base samplings "
+          f"(min_genes={min_genes})...")
+    t_presample = time.time()
+    p_base, base_samplings = find_valid_base_samplings(
+        X_csr, cell_ids_arr, clusters_arr, var_names_list, fractions,
+        n_replicates, min_genes, min_spots_per_cell,
+        min_counts_after_subsampling, min_cells_per_gene,
+    )
+    t_presample = time.time() - t_presample
+
+    valid_fractions = [p for p in fractions if p >= p_base]
+    skipped_fractions = [p for p in fractions if p < p_base]
+    if skipped_fractions:
+        print(f"  Skipped fractions (< p_base): {skipped_fractions}")
+    gene_set_sizes = [s['n_genes'] for s in base_samplings]
+    print(f"  Gene set sizes across replicates: min={min(gene_set_sizes)}, "
+          f"max={max(gene_set_sizes)}, mean={np.mean(gene_set_sizes):.0f}")
+    print(f"  Pre-sampling took {t_presample:.1f}s")
+
+    base_samplings_path = os.path.join(args.output_dir, "_base_samplings.pkl")
+    with open(base_samplings_path, "wb") as f:
+        pickle.dump(base_samplings, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    # ---- Build tasks ----
     tasks = []
-    for fraction in config["subsampling_fractions"]:
-        for rep in range(config["n_replicates"]):
+    for fraction in valid_fractions:
+        for rep in range(n_replicates):
             tasks.append((fraction, rep))
 
+    # ---- Shared memory / worker init ----
     shm_handles = []
     if USE_SHARED_MEMORY:
-        print(f"\n[2/7] Loading adata from {config['adata_path']}...")
-        adata = sc.read_h5ad(config["adata_path"])
-        if sparse.issparse(adata.X):
-            X_csr = adata.X.tocsr()
-        else:
-            X_csr = sparse.csr_matrix(adata.X)
+        print(f"\n[4/8] Creating shared memory...")
         data_arr = np.array(X_csr.data, dtype=np.float32)
         indices_arr = np.array(X_csr.indices, dtype=np.int32)
         indptr_arr = np.array(X_csr.indptr, dtype=np.int64)
-        cell_ids_arr = adata.obs[config["cell_id_column"]].astype(str).values
-        clusters_arr = adata.obs[config["cluster_column"]].astype(str).values
         max_len = 20
         cell_ids_padded = np.array([s[:max_len].ljust(max_len) for s in cell_ids_arr], dtype=f"<U{max_len}")
         clusters_padded = np.array([s[:max_len].ljust(max_len) for s in clusters_arr], dtype=f"<U{max_len}")
-        print(f"\n[3/7] Creating shared memory...")
         shm_data = shared_memory.SharedMemory(create=True, size=data_arr.nbytes)
         shm_indices = shared_memory.SharedMemory(create=True, size=indices_arr.nbytes)
         shm_indptr = shared_memory.SharedMemory(create=True, size=indptr_arr.nbytes)
@@ -568,36 +869,44 @@ def main():
             shm_cell_ids.name, shm_clusters.name,
             data_arr.shape, data_arr.dtype, indices_arr.shape, indices_arr.dtype,
             indptr_arr.shape, indptr_arr.dtype, cell_ids_padded.shape, clusters_padded.shape,
-            X_csr.shape, list(adata.var_names), config["cluster_column"], config["cell_id_column"],
+            X_csr.shape, var_names_list, config["cluster_column"], config["cell_id_column"],
             config["markers"], config["top_genes"],
-            args.skip_mast,
-            args.skip_gsea,
-            args.order_only,
-            config.get("min_cells_per_gene"),
+            args.skip_mast, args.skip_gsea, args.order_only,
+            min_cells_per_gene,
             min_spots_per_cell,
             min_counts_after_subsampling,
+            p_base,
+            base_samplings_path,
+            same_gene_sets_all_p,
+            same_cells_all_p,
         )
         initializer = init_worker
     else:
-        print(f"\n[2/7] Workers will load adata from {config['adata_path']}...")
-        print(f"\n[3/7] Skipping shared memory (not available).")
+        print(f"\n[4/8] Workers will load adata from disk (no shared memory).")
         init_args = (
             config["adata_path"],
-            config["cluster_column"],
-            config["cell_id_column"],
-            config["markers"],
-            config["top_genes"],
-            args.skip_mast,
-            args.skip_gsea,
-            args.order_only,
-            config.get("min_cells_per_gene"),
+            config["cluster_column"], config["cell_id_column"],
+            config["markers"], config["top_genes"],
+            args.skip_mast, args.skip_gsea, args.order_only,
+            min_cells_per_gene,
             min_spots_per_cell,
             min_counts_after_subsampling,
+            p_base,
+            base_samplings_path,
+            same_gene_sets_all_p,
+            same_cells_all_p,
         )
         initializer = init_worker_load_from_path
 
-    print(f"\n[4/7] Running {len(tasks)} tasks with {args.n_workers} workers...")
-    print("      (Bottlenecks: MAST and LN per cluster; expect ~1–5+ min per task depending on n_genes/n_clusters.)")
+    del adata, X_csr
+
+    # ---- Parallel DE ----
+    print(f"\n[5/8] Running {len(tasks)} tasks ({len(valid_fractions)} fractions x "
+          f"{n_replicates} replicates) with {args.n_workers} workers...")
+    if same_gene_sets_all_p:
+        print("      (Gene sets are fixed per replicate from p_base; spots are nested.)")
+    else:
+        print("      (Genes re-discovered per p via min_cells_per_gene filtering; spots are nested.)")
     start = time.time()
     all_records = []
     try:
@@ -617,12 +926,17 @@ def main():
                 shm.unlink()
             except Exception:
                 pass
+        try:
+            os.remove(base_samplings_path)
+        except OSError:
+            pass
 
     total_time = time.time() - start
     print(f"\n  Done in {total_time:.1f}s ({len(tasks)/total_time:.1f} tasks/s)")
 
+    # ---- Save results ----
     df_results = pd.DataFrame(all_records)
-    print(f"\n[5/7] Saving results to {args.output_dir}/...")
+    print(f"\n[6/8] Saving results to {args.output_dir}/...")
     df_results.to_csv(os.path.join(args.output_dir, "subsampling_results_raw.csv"), index=False)
     agg_cols = {
         "jaccard_top": ["mean", "std"],
@@ -630,6 +944,9 @@ def main():
         "avg_abs_lfc": ["mean", "std"],
         "n_sig_genes": ["mean", "std"],
         "n_genes_de_table": ["mean", "std"],
+        "n_genes_used": ["mean", "std"],
+        "n_cells_cluster": ["mean", "std"],
+        "n_cells_other": ["mean", "std"],
         "frac_de_genes_valid_score": ["mean", "std"],
         "de_time_s": ["mean", "std"],
     }
@@ -639,7 +956,25 @@ def main():
     df_agg.columns = ["_".join(c).strip("_") for c in df_agg.columns]
     df_agg.to_csv(os.path.join(args.output_dir, "subsampling_results_aggregated.csv"), index=False)
 
-    print(f"\n[6/7] Generating plots (per-cluster and combined)...")
+    metadata = {
+        "p_base": p_base,
+        "valid_fractions": valid_fractions,
+        "skipped_fractions": skipped_fractions,
+        "n_replicates": n_replicates,
+        "min_genes": min_genes,
+        "min_spots_per_cell": min_spots_per_cell,
+        "min_counts_after_subsampling": min_counts_after_subsampling,
+        "min_cells_per_gene": min_cells_per_gene,
+        "same_gene_sets_all_p": same_gene_sets_all_p,
+        "same_cells_all_p": same_cells_all_p,
+        "pre_sampling_time_s": round(t_presample, 1),
+        "per_replicate_gene_set_sizes": gene_set_sizes,
+    }
+    with open(os.path.join(args.output_dir, "subsampling_metadata.json"), "w") as f:
+        json.dump(metadata, f, indent=2)
+
+    # ---- Plots ----
+    print(f"\n[7/8] Generating plots (per-cluster and combined)...")
     # Metrics to plot; each gets a combined plot and a per-cluster faceted plot
     plot_metrics = [
         ("jaccard_top", "jaccard_top_vs_subsampling.png"),
@@ -723,7 +1058,10 @@ def main():
         ("avg_abs_lfc", "avg_lfc_vs_subsampling.png"),
         ("n_sig_genes", "n_sig_genes_vs_subsampling.png"),
         ("n_genes_de_table", "n_genes_de_table_vs_subsampling.png"),
+        ("n_genes_used", "n_genes_used_vs_subsampling.png"),
         ("frac_de_genes_valid_score", "frac_de_genes_valid_score_vs_subsampling.png"),
+        ("n_cells_cluster", "n_cells_cluster_vs_subsampling.png"),
+        ("n_cells_other", "n_cells_other_vs_subsampling.png"),
     ]:
         if y_col not in df_lfc.columns:
             continue
@@ -762,8 +1100,12 @@ def main():
         plt.savefig(os.path.join(args.output_dir, "de_time_s_vs_subsampling.png"), dpi=300)
         plt.close()
 
-    print(f"\n[7/7] Summary")
-    # Per-cluster: two sets of measures (one per cluster)
+    # ---- Summary ----
+    print(f"\n[8/8] Summary")
+    print(f"  p_base: {p_base}")
+    print(f"  Valid fractions: {valid_fractions}")
+    if skipped_fractions:
+        print(f"  Skipped fractions: {skipped_fractions}")
     for cluster_id in df_results["cluster"].unique():
         sub = df_results[df_results["cluster"] == cluster_id]
         print(f"\n--- Cluster: {cluster_id} ---")
