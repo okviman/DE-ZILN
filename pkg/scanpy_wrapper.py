@@ -39,7 +39,7 @@ def rank_genes_groups_ln(
     key_added: str = "rank_genes_groups",
     test: str = "t",  # forwarded to get_LN_lfcs
     rankby_abs: bool = False,
-    sparse: bool = False,
+    sparse: bool = True,
 ):
     """
     Takes normalized data and performs LN's t-test. Updates the adata object with the results.
