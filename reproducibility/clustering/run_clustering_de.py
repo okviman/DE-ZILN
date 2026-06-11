@@ -13,11 +13,21 @@ Usage:
 import argparse
 import os
 import sys
+import tarfile
 import yaml
 import numpy as np
 import scanpy as sc
+import anndata as ad
 import scipy.sparse as sp
 import pandas as pd
+
+# pandas >= 3.0 defaults to Arrow-backed string dtype, which anndata cannot
+# serialize to h5ad. Disable it before any data is read so all string indices
+# and columns stay as plain numpy object dtype.
+try:
+    pd.set_option("future.infer_string", False)
+except (KeyError, ValueError):
+    pass
 from rpy2.robjects import pandas2ri, numpy2ri, r
 import rpy2.robjects as ro
 from rpy2.robjects.packages import importr
@@ -59,6 +69,86 @@ def tocsr_if_not_sparse(x):
     if sp.issparse(x):
         return x.copy()
     return sp.csr_matrix(x)
+
+
+def _resolve_10x_dir(path):
+    """Return a directory containing a 10x matrix (matrix.mtx[.gz]).
+
+    Accepts either a directory or a .tar.gz/.tgz archive of the 10x
+    filtered_gene_bc_matrices. Archives are extracted next to the archive.
+    """
+    if os.path.isdir(path):
+        search_root = path
+    elif path.endswith((".tar.gz", ".tgz")):
+        extract_root = os.path.join(
+            os.path.dirname(os.path.abspath(path)),
+            "_extracted_" + os.path.basename(path).split(".tar")[0],
+        )
+        with tarfile.open(path) as tf:
+            tf.extractall(extract_root)
+        search_root = extract_root
+    else:
+        raise ValueError(f"Unsupported 10x input path: {path}")
+
+    for root, _dirs, files in os.walk(search_root):
+        if any(f in files for f in ("matrix.mtx", "matrix.mtx.gz")):
+            return root
+    raise FileNotFoundError(f"No matrix.mtx found under {search_root}")
+
+
+def load_input_adata(adata_path):
+    """Load the input AnnData.
+
+    If the path is an .h5ad it is read directly. Otherwise it is treated as raw
+    10x data (a directory or .tar.gz archive) and the standard PBMC3k QC from the
+    Seurat/Scanpy tutorial is applied, returning the full (all-genes) matrix.
+    """
+    if adata_path.endswith(".h5ad"):
+        return sc.read_h5ad(adata_path)
+
+    mtx_dir = _resolve_10x_dir(adata_path)
+    print(f"Reading raw 10x matrix from {mtx_dir} ...")
+    adata = sc.read_10x_mtx(mtx_dir, var_names="gene_symbols", cache=False)
+    adata.var_names_make_unique()
+
+    # Standard PBMC3k QC (matches the tutorial used to build pbmcs3k_pre.h5ad)
+    sc.pp.filter_cells(adata, min_genes=200)
+    sc.pp.filter_genes(adata, min_cells=3)
+    mito_genes = adata.var_names.str.startswith("MT-")
+    counts_per_cell = np.asarray(adata.X.sum(axis=1)).ravel()
+    mito_counts = np.asarray(adata[:, mito_genes].X.sum(axis=1)).ravel()
+    adata.obs["percent_mito"] = mito_counts / counts_per_cell
+    adata.obs["n_counts"] = counts_per_cell
+    adata = adata[adata.obs["n_genes"] < 2500, :]
+    adata = adata[adata.obs["percent_mito"] < 0.05, :]
+    return adata.copy()
+
+def coerce_arrow_strings(adata):
+    """Coerce pandas Arrow-backed string arrays to plain numpy object dtype.
+
+    anndata has no h5ad writer registered for ArrowStringArray, so writing an
+    object whose obs/var (or raw.var) index or string columns use the pandas
+    "string" dtype fails. Convert them to numpy object dtype before writing.
+    """
+    def _fix_df(df):
+        # Force plain numpy object dtype; passing dtype=object explicitly prevents
+        # pandas (>=3 / future.infer_string) from re-inferring an Arrow string dtype.
+        df.index = pd.Index(
+            np.asarray(df.index, dtype=object), dtype=object, name=df.index.name
+        )
+        for col in df.columns:
+            if isinstance(df[col].dtype, pd.StringDtype) or str(df[col].dtype) in ("string", "str"):
+                df[col] = pd.array(np.asarray(df[col], dtype=object), dtype=object)
+        return df
+
+    adata.obs = _fix_df(adata.obs)
+    adata.var = _fix_df(adata.var)
+    if adata.raw is not None:
+        # adata.raw.var returns a fresh DataFrame, so mutating it in place does
+        # not persist; rebuild raw from its own matrix with a cleaned var instead
+        # (raw may hold all genes while adata.X is HVG-subset, so don't use adata).
+        raw_var = _fix_df(adata.raw.var.copy())
+        adata.raw = ad.AnnData(X=adata.raw.X, var=raw_var, obs=adata.obs)
 
 def run_mast_de(
     adata,
@@ -207,6 +297,11 @@ def main():
         default='output',
         help='Directory to save output files (default: output)'
     )
+    parser.add_argument(
+        '--skip-mast',
+        action='store_true',
+        help='Skip the (slow) MAST DE test run via R'
+    )
     
     args = parser.parse_args()
     
@@ -225,9 +320,9 @@ def main():
     resolution_values = [r[0] for r in leiden_resolutions]
     resolution_keys = [r[1] for r in leiden_resolutions]
     
-    # Load AnnData (with all genes)
-    print(f"Loading AnnData from {adata_path}...")
-    adata_full = sc.read_h5ad(adata_path)
+    # Load AnnData (with all genes); supports raw 10x .tar.gz / directory input
+    print(f"Loading input data from {adata_path}...")
+    adata_full = load_input_adata(adata_path)
 
     # ---------------------- Basic filtering step on full matrix ----------------------
     print("Filtering cells with fewer than 200 genes expressed...")
@@ -344,16 +439,27 @@ def main():
         print(f"    Running Scanpy wilcoxon test for '{key_name}' ...")
         sc.tl.rank_genes_groups(adata_full, groupby=key_name, method="wilcoxon", key_added=wilcoxon_key, layer="log1p_norm", use_raw=False)
         # Run MAST (on log1p_norm layer, all genes)
-        mast_key = f"mast_{key_name}"
-        print(f"    Running MAST test for '{key_name}' ...")
-        run_mast_de(adata_full, key_name, log1p_layer="log1p_norm", key_added=mast_key)
+        if not args.skip_mast:
+            mast_key = f"mast_{key_name}"
+            print(f"    Running MAST test for '{key_name}' ...")
+            run_mast_de(adata_full, key_name, log1p_layer="log1p_norm", key_added=mast_key)
+        else:
+            print(f"    Skipping MAST test for '{key_name}' (--skip-mast).")
     
     print("All DE tests complete.")
     # Write updated AnnData with all DE results to file
-    base_name = os.path.splitext(os.path.basename(adata_path))[0]
+    base_name = os.path.basename(adata_path.rstrip("/"))
+    for ext in (".tar.gz", ".tgz", ".h5ad"):
+        if base_name.endswith(ext):
+            base_name = base_name[: -len(ext)]
+            break
+    else:
+        base_name = os.path.splitext(base_name)[0]
     output_file = os.path.join(args.output_dir, f"{base_name}_DE.h5ad")
     print(f"Saving updated AnnData with all DE results to {output_file} ...")
+    coerce_arrow_strings(adata_full)
     adata_full.write(output_file)
+    
     print("Done.")
 
 if __name__ == '__main__':
