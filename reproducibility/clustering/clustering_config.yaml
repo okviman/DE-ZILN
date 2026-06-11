@@ -1,7 +1,9 @@
 # Configuration file for clustering_metrics
 
-# Path to the AnnData file
-adata_path: "../data/pbmcs3k_pre.h5ad"
+# Path to the input data: either an .h5ad file or raw 10x data
+# (a directory or a .tar.gz of filtered_gene_bc_matrices). When raw 10x data is
+# given, standard PBMC3k QC is applied automatically.
+adata_path: "../data/pbmc3k_filtered_gene_bc_matrices.tar.gz"
 
 # Leiden resolutions to test
 # Format: list of [resolution_value, key_name] pairs

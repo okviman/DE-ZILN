@@ -1,0 +1,9 @@
+# Generated pipeline artifacts (DE h5ads, metric CSVs, figures, shareable archives)
+output/
+
+# Local caches used to keep Numba/Matplotlib writable under sandboxing
+.numba_cache/
+.mpl_cache/
+
+# Temp config used to point compute_clustering_metrics at the DE-results h5ad
+.metrics_config.yaml

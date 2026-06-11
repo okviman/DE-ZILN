@@ -27,6 +27,18 @@ def jaccard_index(set_a: Union[Set[str], List[str]], set_b: Union[Set[str], List
     return len(a & b) / union
 
 
+def recall(signature: Union[Set[str], List[str]], markers: Union[Set[str], List[str]]) -> float:
+    """Fraction of marker genes recovered by a signature: |signature & markers| / |markers|.
+
+    Returns 0.0 if the marker set is empty.
+    """
+    sig = set(str(x).strip() for x in signature)
+    mk = set(str(x).strip() for x in markers)
+    if len(mk) == 0:
+        return 0.0
+    return len(sig & mk) / len(mk)
+
+
 def aupr_from_ranking(
     gene_list: List[str],
     score_list: np.ndarray,
@@ -177,6 +189,41 @@ def avg_abs_lfc_adata(
     if sig.empty or "logfoldchanges" not in sig.columns:
         return float("nan")
     return float(sig["logfoldchanges"].abs().mean())
+
+
+def avg_actual_abs_log2fc_adata(
+    adata,
+    group: str,
+    groupby: str,
+    key: str = "rank_genes_groups",
+    layer: str = "log1p_norm",
+    pval_threshold: float = 0.05,
+) -> float:
+    """Mean |log2 fold change| recomputed directly from the log1p layer.
+
+    For a method's significant genes (group vs rest under `groupby`), this is
+    mean_g(|mean(log1p group) - mean(log1p rest)| / ln 2). This is the effect
+    size a t-test on log1p data actually implies, as opposed to scanpy's
+    expm1-back-transformed `logfoldchanges`, which is typically inflated.
+    """
+    df = _get_rank_genes_df(adata, group, key)
+    sig = df[df["pvals_adj"] < pval_threshold]
+    names = sig["names"].astype(str).tolist()
+    if len(names) == 0:
+        return float("nan")
+    var_idx = adata.var_names.get_indexer(names)
+    var_idx = var_idx[var_idx >= 0]
+    if len(var_idx) == 0:
+        return float("nan")
+    X = adata.layers[layer] if layer in adata.layers else adata.X
+    X = X[:, var_idx]
+    in_group = adata.obs[groupby].astype(str).values == str(group)
+    if in_group.sum() == 0 or (~in_group).sum() == 0:
+        return float("nan")
+    mean_g = np.asarray(X[in_group].mean(axis=0)).ravel()
+    mean_r = np.asarray(X[~in_group].mean(axis=0)).ravel()
+    log2fc = (mean_g - mean_r) / np.log(2.0)
+    return float(np.mean(np.abs(log2fc)))
 
 
 def n_sig_genes_adata(
